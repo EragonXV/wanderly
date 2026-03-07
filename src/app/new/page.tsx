@@ -1,8 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Calendar, MapPin, Users, ArrowRight } from 'lucide-react';
+
+const TRIP_CATEGORIES = ['Ausflug', 'Kurztrip', 'Urlaub', 'Workation', 'Sonstiges'] as const;
+
+type PlaceSuggestion = {
+    placeId: string;
+    name: string;
+    displayName: string;
+    lat: number;
+    lng: number;
+};
 
 export default function NewTripPage() {
     const router = useRouter();
@@ -10,13 +20,70 @@ export default function NewTripPage() {
     const [error, setError] = useState<string | null>(null);
     const [title, setTitle] = useState('');
     const [destination, setDestination] = useState('');
+    const [destinationPlaceId, setDestinationPlaceId] = useState('');
+    const [placeSuggestions, setPlaceSuggestions] = useState<PlaceSuggestion[]>([]);
+    const [isLoadingPlaces, setIsLoadingPlaces] = useState(false);
+    const [placeError, setPlaceError] = useState<string | null>(null);
+    const [category, setCategory] = useState<(typeof TRIP_CATEGORIES)[number]>('Sonstiges');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+
+    useEffect(() => {
+        if (destinationPlaceId) {
+            setPlaceSuggestions([]);
+            setIsLoadingPlaces(false);
+            return;
+        }
+
+        const query = destination.trim();
+
+        if (query.length < 2) {
+            setPlaceSuggestions([]);
+            setIsLoadingPlaces(false);
+            return;
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(async () => {
+            try {
+                setIsLoadingPlaces(true);
+                setPlaceError(null);
+                const response = await fetch(`/api/places/search?q=${encodeURIComponent(query)}`, {
+                    signal: controller.signal,
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    setPlaceError(data.message || 'Could not load place suggestions.');
+                    return;
+                }
+                setPlaceSuggestions(Array.isArray(data.places) ? data.places : []);
+            } catch {
+                if (!controller.signal.aborted) {
+                    setPlaceError('Could not load place suggestions.');
+                }
+            } finally {
+                if (!controller.signal.aborted) {
+                    setIsLoadingPlaces(false);
+                }
+            }
+        }, 250);
+
+        return () => {
+            controller.abort();
+            clearTimeout(timeout);
+        };
+    }, [destination, destinationPlaceId]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsSubmitting(true);
         setError(null);
+
+        if (!destinationPlaceId) {
+            setError('Bitte wähle einen realen Ort aus den Vorschlägen aus.');
+            setIsSubmitting(false);
+            return;
+        }
 
         try {
             const response = await fetch('/api/trips', {
@@ -27,6 +94,8 @@ export default function NewTripPage() {
                 body: JSON.stringify({
                     title,
                     destination,
+                    destinationPlaceId,
+                    category,
                     startDate,
                     endDate,
                 }),
@@ -90,9 +159,59 @@ export default function NewTripPage() {
                                     type="text"
                                     placeholder="City, Country, or Region"
                                     value={destination}
-                                    onChange={(e) => setDestination(e.target.value)}
+                                    onChange={(e) => {
+                                        setDestination(e.target.value);
+                                        setDestinationPlaceId('');
+                                    }}
                                     className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
                                 />
+                                {isLoadingPlaces && (
+                                    <p className="text-xs text-slate-500">Searching places...</p>
+                                )}
+                                {placeError && (
+                                    <p className="text-xs text-red-600">{placeError}</p>
+                                )}
+                                {placeSuggestions.length > 0 && (
+                                    <div className="max-h-52 overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                                        {placeSuggestions.map((place) => (
+                                            <button
+                                                key={place.placeId}
+                                                type="button"
+                                                onClick={() => {
+                                                    setDestination(place.name);
+                                                    setDestinationPlaceId(place.placeId);
+                                                    setPlaceSuggestions([]);
+                                                }}
+                                                className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 last:border-b-0"
+                                            >
+                                                <span className="font-medium text-slate-900">{place.name}</span>
+                                                <span className="mt-0.5 block text-xs text-slate-500">{place.displayName}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                                {!destinationPlaceId && destination.trim().length > 0 && !isLoadingPlaces && (
+                                    <p className="text-xs text-amber-600">Bitte einen Vorschlag auswählen.</p>
+                                )}
+                            </div>
+
+                            <div className="space-y-3">
+                                <label htmlFor="category" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                    Category
+                                </label>
+                                <select
+                                    id="category"
+                                    required
+                                    value={category}
+                                    onChange={(e) => setCategory(e.target.value as (typeof TRIP_CATEGORIES)[number])}
+                                    className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                >
+                                    {TRIP_CATEGORIES.map((entry) => (
+                                        <option key={entry} value={entry}>
+                                            {entry}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
 
                             <div className="space-y-3">

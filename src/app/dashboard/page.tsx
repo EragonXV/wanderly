@@ -9,6 +9,19 @@ import { prisma } from '@/lib/prisma/client';
 const DEFAULT_COVER_IMAGE =
   'https://images.unsplash.com/photo-1469474968028-56623f02e42e?q=80&w=800&auto=format&fit=crop';
 
+type DashboardTrip = {
+  id: string;
+  title: string;
+  destination: string;
+  category: string;
+  startDate: Date;
+  endDate: Date;
+  coverImage: string | null;
+  _count: {
+    members: number;
+  };
+};
+
 export default async function Home() {
   const session = await getServerSession(authOptions);
   const userId = session?.user?.id;
@@ -17,7 +30,7 @@ export default async function Home() {
     redirect('/login');
   }
 
-  const trips = await prisma.trip.findMany({
+  const trips = (await prisma.trip.findMany({
     where: {
       members: {
         some: {
@@ -35,7 +48,7 @@ export default async function Home() {
     orderBy: {
       startDate: 'asc',
     },
-  });
+  })) as unknown as DashboardTrip[];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -71,8 +84,13 @@ export default async function Home() {
                 </h3>
               </div>
 
-              <div className="p-5 flex-1 flex flex-col">
-                <div className="space-y-3 flex-1">
+                <div className="p-5 flex-1 flex flex-col">
+                  <div className="space-y-3 flex-1">
+                  <div className="flex items-center">
+                    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                      {trip.category}
+                    </span>
+                  </div>
                   <div className="flex items-center gap-2 text-slate-600">
                     <MapPin className="h-4 w-4 text-blue-500 shrink-0" />
                     <span className="text-sm truncate">{trip.destination}</span>

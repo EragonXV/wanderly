@@ -8,6 +8,48 @@ type Props = {
     params: Promise<{ id: string }>;
 };
 
+type TripWithRelations = {
+    id: string;
+    title: string;
+    description: string | null;
+    destination: string;
+    category: string;
+    startDate: Date;
+    endDate: Date;
+    coverImage: string | null;
+    members: {
+        userId: string;
+        role: 'OWNER' | 'MEMBER';
+        user: {
+            id: string;
+            name: string | null;
+            email: string | null;
+        };
+    }[];
+    itineraryDays: {
+        id: string;
+        dayNumber: number;
+        summary: string;
+        location: string;
+        activities: {
+            id: string;
+            time: string;
+            title: string;
+            type: 'FLIGHT' | 'LODGING' | 'FOOD' | 'ACTIVITY';
+        }[];
+        tags: { label: string }[];
+    }[];
+    budgetItems: {
+        id: string;
+        title: string;
+        category: string;
+        pricingMode: 'PER_PERSON' | 'GROUP_TOTAL';
+        peopleCount: number;
+        estimatedCostCents: number;
+        notes: string | null;
+    }[];
+};
+
 const DEFAULT_COVER_IMAGE =
     'https://images.unsplash.com/photo-1469474968028-56623f02e42e?q=80&w=2000&auto=format&fit=crop';
 
@@ -28,7 +70,7 @@ export default async function TripDetailsPage({ params }: Props) {
         redirect('/login');
     }
 
-    const trip = await prisma.trip.findFirst({
+    const trip = (await prisma.trip.findFirst({
         where: {
             id,
             members: {
@@ -52,8 +94,30 @@ export default async function TripDetailsPage({ params }: Props) {
                     createdAt: 'asc',
                 },
             },
+            itineraryDays: {
+                include: {
+                    activities: {
+                        orderBy: {
+                            time: 'asc',
+                        },
+                    },
+                    tags: {
+                        orderBy: {
+                            label: 'asc',
+                        },
+                    },
+                },
+                orderBy: {
+                    dayNumber: 'asc',
+                },
+            },
+            budgetItems: {
+                orderBy: {
+                    createdAt: 'asc',
+                },
+            },
         },
-    });
+    })) as unknown as TripWithRelations | null;
 
     if (!trip) {
         notFound();
@@ -68,18 +132,47 @@ export default async function TripDetailsPage({ params }: Props) {
             color: AVATAR_COLORS[index % AVATAR_COLORS.length],
         };
     });
+    const currentMember = trip.members.find((member) => member.userId === userId);
+    const canManage = currentMember?.role === 'OWNER';
+    const canViewParticipants = Boolean(currentMember);
 
     return (
         <TripDetailsClient
             trip={{
                 id: trip.id,
                 title: trip.title,
+                description: trip.description,
                 destination: trip.destination,
+                category: trip.category,
                 startDate: trip.startDate.toISOString(),
                 endDate: trip.endDate.toISOString(),
                 coverImage: trip.coverImage || DEFAULT_COVER_IMAGE,
                 collaborators,
+                itineraryDays: trip.itineraryDays.map((day) => ({
+                    id: day.id,
+                    dayNumber: day.dayNumber,
+                    summary: day.summary,
+                    location: day.location,
+                    activities: day.activities.map((activity) => ({
+                        id: activity.id,
+                        time: activity.time,
+                        title: activity.title,
+                        type: activity.type,
+                    })),
+                    tags: day.tags.map((tag) => tag.label),
+                })),
+                budgetItems: trip.budgetItems.map((item) => ({
+                    id: item.id,
+                    title: item.title,
+                    category: item.category,
+                    pricingMode: item.pricingMode,
+                    peopleCount: item.peopleCount,
+                    estimatedCostCents: item.estimatedCostCents,
+                    notes: item.notes,
+                })),
             }}
+            canManage={canManage}
+            canViewParticipants={canViewParticipants}
         />
     );
 }

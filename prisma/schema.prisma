@@ -22,13 +22,20 @@ model User {
 model Trip {
   id          String       @id @default(cuid())
   title       String
+  description String?
   destination String
+  destinationPlaceId String?
+  destinationLat Float?
+  destinationLng Float?
+  category    String       @default("Sonstiges")
   startDate   DateTime
   endDate     DateTime
   coverImage  String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   members     TripMember[]
+  itineraryDays TripItineraryDay[]
+  budgetItems TripBudgetItem[]
 }
 
 model TripMember {
@@ -46,4 +53,69 @@ model TripMember {
 enum TripRole {
   OWNER
   MEMBER
+}
+
+model TripItineraryDay {
+  id        String    @id @default(cuid())
+  tripId    String
+  dayNumber Int
+  summary   String
+  location  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  trip      Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  tags      TripItineraryTag[]
+  activities TripItineraryActivity[]
+
+  @@unique([tripId, dayNumber])
+  @@index([tripId, dayNumber])
+}
+
+model TripItineraryTag {
+  id     String           @id @default(cuid())
+  dayId  String
+  label  String
+  day    TripItineraryDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  @@index([dayId])
+}
+
+model TripItineraryActivity {
+  id        String           @id @default(cuid())
+  dayId     String
+  time      String
+  title     String
+  type      ActivityType     @default(ACTIVITY)
+  createdAt DateTime         @default(now())
+  day       TripItineraryDay @relation(fields: [dayId], references: [id], onDelete: Cascade)
+
+  @@index([dayId, createdAt])
+}
+
+model TripBudgetItem {
+  id                 String   @id @default(cuid())
+  tripId             String
+  title              String
+  category           String
+  pricingMode        BudgetPricingMode @default(GROUP_TOTAL)
+  peopleCount        Int      @default(1)
+  estimatedCostCents Int
+  notes              String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  trip               Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, createdAt])
+}
+
+enum BudgetPricingMode {
+  PER_PERSON
+  GROUP_TOTAL
+}
+
+enum ActivityType {
+  FLIGHT
+  LODGING
+  FOOD
+  ACTIVITY
 }

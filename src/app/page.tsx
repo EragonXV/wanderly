@@ -1,7 +1,16 @@
 import Link from 'next/link';
 import { Plane, Users, CalendarDays, MapPin, ArrowRight } from 'lucide-react';
+import { getServerSession } from 'next-auth';
+import { redirect } from 'next/navigation';
+import { authOptions } from '@/lib/auth/authOptions';
 
-export default function LandingPage() {
+export default async function LandingPage() {
+    const session = await getServerSession(authOptions);
+
+    if (session?.user) {
+        redirect('/dashboard');
+    }
+
     return (
         <div className="bg-slate-50">
             {/* Hero Section */}
