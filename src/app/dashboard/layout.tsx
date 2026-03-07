@@ -1,0 +1,35 @@
+'use client';
+
+import { useSession } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
+
+export default function DashboardLayout({
+    children,
+}: {
+    children: React.ReactNode;
+}) {
+    const { data: session, status } = useSession();
+    const isLoading = status === 'loading';
+    const router = useRouter();
+
+    useEffect(() => {
+        if (!isLoading && !session?.user) {
+            router.push('/login');
+        }
+    }, [session, isLoading, router]);
+
+    if (isLoading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+            </div>
+        );
+    }
+
+    if (!session?.user) {
+        return null; // Will redirect in useEffect
+    }
+
+    return <>{children}</>;
+}
