@@ -6,6 +6,15 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, Trash2 } from 'lucide-react';
 
 const TRIP_CATEGORIES = ['Ausflug', 'Kurztrip', 'Urlaub', 'Workation', 'Sonstiges'] as const;
+const TRIP_TIME_MODES = [
+    { value: 'FIXED', label: 'Fixed Time' },
+    { value: 'FLEXIBLE', label: 'Flexible Time' },
+] as const;
+const TRIP_PARTICIPANT_MODES = [
+    { value: 'NONE', label: 'No estimate' },
+    { value: 'FIXED', label: 'Fixed number' },
+    { value: 'RANGE', label: 'Range' },
+] as const;
 
 type PlaceSuggestion = {
     placeId: string;
@@ -22,8 +31,16 @@ type Props = {
     initialDestinationPlaceId: string | null;
     initialCategory: string;
     initialDescription: string | null;
+    initialTimeMode: 'FIXED' | 'FLEXIBLE';
     initialStartDate: string;
     initialEndDate: string;
+    initialPlanningStartDate: string;
+    initialPlanningEndDate: string;
+    initialPlannedDurationDays: number | null;
+    initialParticipantMode: 'NONE' | 'FIXED' | 'RANGE';
+    initialParticipantFixedCount: number | null;
+    initialParticipantMinCount: number | null;
+    initialParticipantMaxCount: number | null;
     initialCoverImage: string | null;
 };
 
@@ -34,8 +51,16 @@ export default function TripSettingsClient({
     initialDestinationPlaceId,
     initialCategory,
     initialDescription,
+    initialTimeMode,
     initialStartDate,
     initialEndDate,
+    initialPlanningStartDate,
+    initialPlanningEndDate,
+    initialPlannedDurationDays,
+    initialParticipantMode,
+    initialParticipantFixedCount,
+    initialParticipantMinCount,
+    initialParticipantMaxCount,
     initialCoverImage,
 }: Props) {
     const router = useRouter();
@@ -47,8 +72,24 @@ export default function TripSettingsClient({
     const [placeError, setPlaceError] = useState('');
     const [category, setCategory] = useState(initialCategory);
     const [description, setDescription] = useState(initialDescription || '');
+    const [timeMode, setTimeMode] = useState<(typeof TRIP_TIME_MODES)[number]['value']>(initialTimeMode);
     const [startDate, setStartDate] = useState(initialStartDate);
     const [endDate, setEndDate] = useState(initialEndDate);
+    const [planningStartDate, setPlanningStartDate] = useState(initialPlanningStartDate);
+    const [planningEndDate, setPlanningEndDate] = useState(initialPlanningEndDate);
+    const [plannedDurationDays, setPlannedDurationDays] = useState(
+        initialPlannedDurationDays == null ? '' : String(initialPlannedDurationDays)
+    );
+    const [participantMode, setParticipantMode] = useState<(typeof TRIP_PARTICIPANT_MODES)[number]['value']>(initialParticipantMode);
+    const [participantFixedCount, setParticipantFixedCount] = useState(
+        initialParticipantFixedCount == null ? '' : String(initialParticipantFixedCount)
+    );
+    const [participantMinCount, setParticipantMinCount] = useState(
+        initialParticipantMinCount == null ? '' : String(initialParticipantMinCount)
+    );
+    const [participantMaxCount, setParticipantMaxCount] = useState(
+        initialParticipantMaxCount == null ? '' : String(initialParticipantMaxCount)
+    );
     const [coverImage, setCoverImage] = useState(initialCoverImage || '');
     const [isSaving, setIsSaving] = useState(false);
     const [isDeletingTrip, setIsDeletingTrip] = useState(false);
@@ -106,9 +147,36 @@ export default function TripSettingsClient({
         setSuccess('');
         setPlaceError('');
 
-        if (new Date(endDate) < new Date(startDate)) {
-            setError('End date must be after start date.');
-            return;
+        if (timeMode === 'FIXED') {
+            if (new Date(endDate) < new Date(startDate)) {
+                setError('End date must be after start date.');
+                return;
+            }
+        } else {
+            const parsedDuration = Number(plannedDurationDays);
+            if (!planningStartDate || !planningEndDate || !Number.isInteger(parsedDuration) || parsedDuration < 1) {
+                setError('Please provide planning period and planned duration.');
+                return;
+            }
+            if (new Date(planningEndDate) < new Date(planningStartDate)) {
+                setError('Planning period end must be after start.');
+                return;
+            }
+        }
+
+        if (participantMode === 'FIXED') {
+            const parsedFixed = Number(participantFixedCount);
+            if (!Number.isInteger(parsedFixed) || parsedFixed < 1) {
+                setError('Please provide a valid fixed participant count.');
+                return;
+            }
+        } else if (participantMode === 'RANGE') {
+            const parsedMin = Number(participantMinCount);
+            const parsedMax = Number(participantMaxCount);
+            if (!Number.isInteger(parsedMin) || !Number.isInteger(parsedMax) || parsedMin < 1 || parsedMax < parsedMin) {
+                setError('Please provide a valid participant range.');
+                return;
+            }
         }
 
         if (!destinationPlaceId) {
@@ -130,8 +198,16 @@ export default function TripSettingsClient({
                     destinationPlaceId,
                     category,
                     description,
+                    timeMode,
                     startDate,
                     endDate,
+                    planningStartDate,
+                    planningEndDate,
+                    plannedDurationDays,
+                    participantMode,
+                    participantFixedCount,
+                    participantMinCount,
+                    participantMaxCount,
                     coverImage,
                 }),
             });
@@ -148,8 +224,24 @@ export default function TripSettingsClient({
             setDestinationPlaceId(data.trip.destinationPlaceId || '');
             setCategory(data.trip.category);
             setDescription(data.trip.description || '');
+            setTimeMode(data.trip.timeMode || 'FIXED');
             setStartDate(String(data.trip.startDate).slice(0, 10));
             setEndDate(String(data.trip.endDate).slice(0, 10));
+            setPlanningStartDate(data.trip.planningStartDate ? String(data.trip.planningStartDate).slice(0, 10) : '');
+            setPlanningEndDate(data.trip.planningEndDate ? String(data.trip.planningEndDate).slice(0, 10) : '');
+            setPlannedDurationDays(
+                data.trip.plannedDurationDays == null ? '' : String(data.trip.plannedDurationDays)
+            );
+            setParticipantMode(data.trip.participantMode || 'NONE');
+            setParticipantFixedCount(
+                data.trip.participantFixedCount == null ? '' : String(data.trip.participantFixedCount)
+            );
+            setParticipantMinCount(
+                data.trip.participantMinCount == null ? '' : String(data.trip.participantMinCount)
+            );
+            setParticipantMaxCount(
+                data.trip.participantMaxCount == null ? '' : String(data.trip.participantMaxCount)
+            );
             setCoverImage(data.trip.coverImage || '');
             setSuccess('Trip settings saved.');
             router.refresh();
@@ -314,34 +406,168 @@ export default function TripSettingsClient({
                         </select>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label htmlFor="start-date" className="block text-sm font-medium text-slate-700">
-                                Start date
-                            </label>
-                            <input
-                                id="start-date"
-                                required
-                                type="date"
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                            />
-                        </div>
-                        <div>
-                            <label htmlFor="end-date" className="block text-sm font-medium text-slate-700">
-                                End date
-                            </label>
-                            <input
-                                id="end-date"
-                                required
-                                type="date"
-                                value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
-                                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                            />
-                        </div>
+                    <div>
+                        <label htmlFor="time-mode" className="block text-sm font-medium text-slate-700">
+                            Time mode
+                        </label>
+                        <select
+                            id="time-mode"
+                            required
+                            value={timeMode}
+                            onChange={(e) => setTimeMode(e.target.value as (typeof TRIP_TIME_MODES)[number]['value'])}
+                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                        >
+                            {TRIP_TIME_MODES.map((entry) => (
+                                <option key={entry.value} value={entry.value}>
+                                    {entry.label}
+                                </option>
+                            ))}
+                        </select>
                     </div>
+
+                    {timeMode === 'FIXED' ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label htmlFor="start-date" className="block text-sm font-medium text-slate-700">
+                                    Start date
+                                </label>
+                                <input
+                                    id="start-date"
+                                    required
+                                    type="date"
+                                    value={startDate}
+                                    onChange={(e) => setStartDate(e.target.value)}
+                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="end-date" className="block text-sm font-medium text-slate-700">
+                                    End date
+                                </label>
+                                <input
+                                    id="end-date"
+                                    required
+                                    type="date"
+                                    value={endDate}
+                                    onChange={(e) => setEndDate(e.target.value)}
+                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                />
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label htmlFor="planning-start-date" className="block text-sm font-medium text-slate-700">
+                                        Planning window start
+                                    </label>
+                                    <input
+                                        id="planning-start-date"
+                                        required
+                                        type="date"
+                                        value={planningStartDate}
+                                        onChange={(e) => setPlanningStartDate(e.target.value)}
+                                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label htmlFor="planning-end-date" className="block text-sm font-medium text-slate-700">
+                                        Planning window end
+                                    </label>
+                                    <input
+                                        id="planning-end-date"
+                                        required
+                                        type="date"
+                                        value={planningEndDate}
+                                        onChange={(e) => setPlanningEndDate(e.target.value)}
+                                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label htmlFor="planned-duration-days" className="block text-sm font-medium text-slate-700">
+                                    Planned travel duration (days)
+                                </label>
+                                <input
+                                    id="planned-duration-days"
+                                    required
+                                    type="number"
+                                    min={1}
+                                    value={plannedDurationDays}
+                                    onChange={(e) => setPlannedDurationDays(e.target.value)}
+                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                />
+                            </div>
+                        </>
+                    )}
+
+                    <div>
+                        <label htmlFor="participant-mode" className="block text-sm font-medium text-slate-700">
+                            Planned participants
+                        </label>
+                        <select
+                            id="participant-mode"
+                            value={participantMode}
+                            onChange={(e) => setParticipantMode(e.target.value as (typeof TRIP_PARTICIPANT_MODES)[number]['value'])}
+                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                        >
+                            {TRIP_PARTICIPANT_MODES.map((entry) => (
+                                <option key={entry.value} value={entry.value}>
+                                    {entry.label}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {participantMode === 'FIXED' && (
+                        <div>
+                            <label htmlFor="participant-fixed-count" className="block text-sm font-medium text-slate-700">
+                                Number of participants
+                            </label>
+                            <input
+                                id="participant-fixed-count"
+                                type="number"
+                                min={1}
+                                required
+                                value={participantFixedCount}
+                                onChange={(e) => setParticipantFixedCount(e.target.value)}
+                                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                            />
+                        </div>
+                    )}
+
+                    {participantMode === 'RANGE' && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label htmlFor="participant-min-count" className="block text-sm font-medium text-slate-700">
+                                    Min participants
+                                </label>
+                                <input
+                                    id="participant-min-count"
+                                    type="number"
+                                    min={1}
+                                    required
+                                    value={participantMinCount}
+                                    onChange={(e) => setParticipantMinCount(e.target.value)}
+                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="participant-max-count" className="block text-sm font-medium text-slate-700">
+                                    Max participants
+                                </label>
+                                <input
+                                    id="participant-max-count"
+                                    type="number"
+                                    min={1}
+                                    required
+                                    value={participantMaxCount}
+                                    onChange={(e) => setParticipantMaxCount(e.target.value)}
+                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                />
+                            </div>
+                        </div>
+                    )}
 
                     <div>
                         <label htmlFor="cover-image" className="block text-sm font-medium text-slate-700">

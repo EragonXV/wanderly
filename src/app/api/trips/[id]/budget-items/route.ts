@@ -15,6 +15,8 @@ type BudgetItemRecord = {
     pricingMode: 'PER_PERSON' | 'GROUP_TOTAL';
     peopleCount: number;
     estimatedCostCents: number;
+    dayStart: number | null;
+    dayEnd: number | null;
     notes: string | null;
 };
 
@@ -25,6 +27,8 @@ type BudgetItemCreateInput = {
     pricingMode: 'PER_PERSON' | 'GROUP_TOTAL';
     peopleCount: number;
     estimatedCostCents: number;
+    dayStart: number | null;
+    dayEnd: number | null;
     notes: string | null;
 };
 
@@ -55,7 +59,7 @@ export async function POST(req: Request, context: Context) {
         }
 
         const { id: tripId } = await context.params;
-        const { title, category, pricingMode, peopleCount, estimatedCost, notes } = await req.json();
+        const { title, category, pricingMode, peopleCount, estimatedCost, dayStart, dayEnd, notes } = await req.json();
 
         const parsedTitle = typeof title === 'string' ? title.trim() : '';
         const parsedCategory = typeof category === 'string' ? category.trim().toUpperCase() : '';
@@ -84,6 +88,28 @@ export async function POST(req: Request, context: Context) {
             return NextResponse.json({ message: 'Estimated cost must be greater than 0' }, { status: 400 });
         }
 
+        const parsedDayStartRaw = dayStart === '' || dayStart == null ? null : Number(dayStart);
+        const parsedDayEndRaw = dayEnd === '' || dayEnd == null ? null : Number(dayEnd);
+        let parsedDayStart: number | null = null;
+        let parsedDayEnd: number | null = null;
+
+        if (parsedDayStartRaw !== null) {
+            if (!Number.isInteger(parsedDayStartRaw) || parsedDayStartRaw < 1) {
+                return NextResponse.json({ message: 'Day start must be a positive integer' }, { status: 400 });
+            }
+            parsedDayStart = parsedDayStartRaw;
+            if (parsedDayEndRaw === null) {
+                parsedDayEnd = parsedDayStartRaw;
+            } else {
+                if (!Number.isInteger(parsedDayEndRaw) || parsedDayEndRaw < parsedDayStartRaw) {
+                    return NextResponse.json({ message: 'Day end must be greater than or equal to day start' }, { status: 400 });
+                }
+                parsedDayEnd = parsedDayEndRaw;
+            }
+        } else if (parsedDayEndRaw !== null) {
+            return NextResponse.json({ message: 'Day start is required when day end is set' }, { status: 400 });
+        }
+
         const membership = await prisma.tripMember.findUnique({
             where: {
                 tripId_userId: {
@@ -101,6 +127,28 @@ export async function POST(req: Request, context: Context) {
             return NextResponse.json({ message: 'Only the owner can edit budget' }, { status: 403 });
         }
 
+        const trip = await prisma.trip.findUnique({
+            where: { id: tripId },
+            select: { timeMode: true, startDate: true, endDate: true, plannedDurationDays: true },
+        });
+        if (!trip) {
+            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
+        }
+
+        const tripDays =
+            trip.timeMode === 'FLEXIBLE'
+                ? Math.max(1, trip.plannedDurationDays ?? 1)
+                : Math.max(
+                      1,
+                      Math.floor((trip.endDate.getTime() - trip.startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1
+                  );
+        if (parsedDayStart !== null && parsedDayEnd !== null && (parsedDayStart > tripDays || parsedDayEnd > tripDays)) {
+            return NextResponse.json(
+                { message: `Assigned days must be within trip range 1-${tripDays}` },
+                { status: 400 }
+            );
+        }
+
         const budgetItem = await budgetItemClient.create({
             data: {
                 tripId,
@@ -109,6 +157,8 @@ export async function POST(req: Request, context: Context) {
                 pricingMode: parsedPricingMode as 'PER_PERSON' | 'GROUP_TOTAL',
                 peopleCount: parsedPeopleCount,
                 estimatedCostCents: Math.round(parsedEstimatedCost * 100),
+                dayStart: parsedDayStart,
+                dayEnd: parsedDayEnd,
                 notes: parsedNotes || null,
             },
         });

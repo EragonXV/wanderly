@@ -5,6 +5,15 @@ import { useRouter } from 'next/navigation';
 import { Calendar, MapPin, Users, ArrowRight } from 'lucide-react';
 
 const TRIP_CATEGORIES = ['Ausflug', 'Kurztrip', 'Urlaub', 'Workation', 'Sonstiges'] as const;
+const TRIP_TIME_MODES = [
+    { value: 'FIXED', label: 'Fixed Time' },
+    { value: 'FLEXIBLE', label: 'Flexible Time' },
+] as const;
+const TRIP_PARTICIPANT_MODES = [
+    { value: 'NONE', label: 'No estimate' },
+    { value: 'FIXED', label: 'Fixed number' },
+    { value: 'RANGE', label: 'Range' },
+] as const;
 
 type PlaceSuggestion = {
     placeId: string;
@@ -25,8 +34,18 @@ export default function NewTripPage() {
     const [isLoadingPlaces, setIsLoadingPlaces] = useState(false);
     const [placeError, setPlaceError] = useState<string | null>(null);
     const [category, setCategory] = useState<(typeof TRIP_CATEGORIES)[number]>('Sonstiges');
+    const [description, setDescription] = useState('');
+    const [coverImage, setCoverImage] = useState('');
+    const [timeMode, setTimeMode] = useState<(typeof TRIP_TIME_MODES)[number]['value']>('FIXED');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
+    const [planningStartDate, setPlanningStartDate] = useState('');
+    const [planningEndDate, setPlanningEndDate] = useState('');
+    const [plannedDurationDays, setPlannedDurationDays] = useState('');
+    const [participantMode, setParticipantMode] = useState<(typeof TRIP_PARTICIPANT_MODES)[number]['value']>('NONE');
+    const [participantFixedCount, setParticipantFixedCount] = useState('');
+    const [participantMinCount, setParticipantMinCount] = useState('');
+    const [participantMaxCount, setParticipantMaxCount] = useState('');
 
     useEffect(() => {
         if (destinationPlaceId) {
@@ -85,6 +104,49 @@ export default function NewTripPage() {
             return;
         }
 
+        if (timeMode === 'FIXED') {
+            if (!startDate || !endDate) {
+                setError('Bitte Start- und Enddatum angeben.');
+                setIsSubmitting(false);
+                return;
+            }
+            if (new Date(endDate) < new Date(startDate)) {
+                setError('End date must be after start date.');
+                setIsSubmitting(false);
+                return;
+            }
+        } else {
+            const parsedDuration = Number(plannedDurationDays);
+            if (!planningStartDate || !planningEndDate || !Number.isInteger(parsedDuration) || parsedDuration < 1) {
+                setError('Bitte Planungszeitraum und geplante Reisedauer angeben.');
+                setIsSubmitting(false);
+                return;
+            }
+            if (new Date(planningEndDate) < new Date(planningStartDate)) {
+                setError('Planning period end must be after start.');
+                setIsSubmitting(false);
+                return;
+            }
+        }
+
+        if (participantMode === 'FIXED') {
+            const parsedFixed = Number(participantFixedCount);
+            if (!Number.isInteger(parsedFixed) || parsedFixed < 1) {
+                setError('Bitte eine gültige fixe Teilnehmerzahl angeben.');
+                setIsSubmitting(false);
+                return;
+            }
+        }
+        if (participantMode === 'RANGE') {
+            const parsedMin = Number(participantMinCount);
+            const parsedMax = Number(participantMaxCount);
+            if (!Number.isInteger(parsedMin) || !Number.isInteger(parsedMax) || parsedMin < 1 || parsedMax < parsedMin) {
+                setError('Bitte eine gültige Teilnehmer-Range angeben.');
+                setIsSubmitting(false);
+                return;
+            }
+        }
+
         try {
             const response = await fetch('/api/trips', {
                 method: 'POST',
@@ -96,8 +158,18 @@ export default function NewTripPage() {
                     destination,
                     destinationPlaceId,
                     category,
+                    description,
+                    coverImage,
+                    timeMode,
                     startDate,
                     endDate,
+                    planningStartDate,
+                    planningEndDate,
+                    plannedDurationDays,
+                    participantMode,
+                    participantFixedCount,
+                    participantMinCount,
+                    participantMaxCount,
                 }),
             });
 
@@ -214,10 +286,59 @@ export default function NewTripPage() {
                                 </select>
                             </div>
 
-                            <div className="space-y-3">
+                            <div className="space-y-3 sm:col-span-2">
+                                <label htmlFor="description" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                    Description
+                                </label>
+                                <textarea
+                                    id="description"
+                                    rows={3}
+                                    placeholder="What is this trip about?"
+                                    value={description}
+                                    onChange={(e) => setDescription(e.target.value)}
+                                    className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                />
+                            </div>
+
+                            <div className="space-y-3 sm:col-span-2">
+                                <label htmlFor="coverImage" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                    Cover Image URL
+                                </label>
+                                <input
+                                    id="coverImage"
+                                    type="url"
+                                    placeholder="https://example.com/trip-cover.jpg"
+                                    value={coverImage}
+                                    onChange={(e) => setCoverImage(e.target.value)}
+                                    className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                />
+                            </div>
+
+                            <div className="space-y-3 sm:col-span-2">
+                                <label htmlFor="timeMode" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                    <Calendar className="h-4 w-4 text-blue-500" />
+                                    Time mode
+                                </label>
+                                <select
+                                    id="timeMode"
+                                    required
+                                    value={timeMode}
+                                    onChange={(e) => setTimeMode(e.target.value as (typeof TRIP_TIME_MODES)[number]['value'])}
+                                    className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                >
+                                    {TRIP_TIME_MODES.map((entry) => (
+                                        <option key={entry.value} value={entry.value}>
+                                            {entry.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {timeMode === 'FIXED' ? (
+                                <div className="space-y-3 sm:col-span-2">
                                 <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
                                     <Calendar className="h-4 w-4 text-blue-500" />
-                                    When?
+                                    Exact travel dates
                                 </label>
                                 <div className="flex items-center gap-2">
                                     <input
@@ -237,6 +358,118 @@ export default function NewTripPage() {
                                     />
                                 </div>
                             </div>
+                            ) : (
+                                <>
+                                    <div className="space-y-3">
+                                        <label htmlFor="planningStartDate" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                            Planning window start
+                                        </label>
+                                        <input
+                                            id="planningStartDate"
+                                            type="date"
+                                            required
+                                            value={planningStartDate}
+                                            onChange={(e) => setPlanningStartDate(e.target.value)}
+                                            className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                        />
+                                    </div>
+                                    <div className="space-y-3">
+                                        <label htmlFor="planningEndDate" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                            Planning window end
+                                        </label>
+                                        <input
+                                            id="planningEndDate"
+                                            type="date"
+                                            required
+                                            value={planningEndDate}
+                                            onChange={(e) => setPlanningEndDate(e.target.value)}
+                                            className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                        />
+                                    </div>
+                                    <div className="space-y-3 sm:col-span-2">
+                                        <label htmlFor="plannedDurationDays" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                            Planned travel duration (days)
+                                        </label>
+                                        <input
+                                            id="plannedDurationDays"
+                                            type="number"
+                                            min={1}
+                                            required
+                                            value={plannedDurationDays}
+                                            onChange={(e) => setPlannedDurationDays(e.target.value)}
+                                            className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                        />
+                                    </div>
+                                </>
+                            )}
+
+                            <div className="space-y-3 sm:col-span-2">
+                                <label htmlFor="participantMode" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                    Planned participants
+                                </label>
+                                <select
+                                    id="participantMode"
+                                    value={participantMode}
+                                    onChange={(e) => setParticipantMode(e.target.value as (typeof TRIP_PARTICIPANT_MODES)[number]['value'])}
+                                    className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                >
+                                    {TRIP_PARTICIPANT_MODES.map((entry) => (
+                                        <option key={entry.value} value={entry.value}>
+                                            {entry.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {participantMode === 'FIXED' && (
+                                <div className="space-y-3 sm:col-span-2">
+                                    <label htmlFor="participantFixedCount" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                        Number of participants
+                                    </label>
+                                    <input
+                                        id="participantFixedCount"
+                                        type="number"
+                                        min={1}
+                                        required
+                                        value={participantFixedCount}
+                                        onChange={(e) => setParticipantFixedCount(e.target.value)}
+                                        className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                    />
+                                </div>
+                            )}
+
+                            {participantMode === 'RANGE' && (
+                                <>
+                                    <div className="space-y-3">
+                                        <label htmlFor="participantMinCount" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                            Min participants
+                                        </label>
+                                        <input
+                                            id="participantMinCount"
+                                            type="number"
+                                            min={1}
+                                            required
+                                            value={participantMinCount}
+                                            onChange={(e) => setParticipantMinCount(e.target.value)}
+                                            className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                        />
+                                    </div>
+                                    <div className="space-y-3">
+                                        <label htmlFor="participantMaxCount" className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                                            Max participants
+                                        </label>
+                                        <input
+                                            id="participantMaxCount"
+                                            type="number"
+                                            min={1}
+                                            required
+                                            value={participantMaxCount}
+                                            onChange={(e) => setParticipantMaxCount(e.target.value)}
+                                            className="w-full rounded-xl border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all outline-none"
+                                        />
+                                    </div>
+                                </>
+                            )}
                         </div>
 
                         <div className="space-y-3">

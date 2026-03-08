@@ -1,11 +1,11 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
     ArrowLeft, Calendar, MapPin, Users, Settings, Plus,
-    Coffee, Map, Camera, Utensils, ChevronDown, ChevronRight
+    Coffee, Map, Camera, Utensils, ChevronDown, ChevronRight, LayoutDashboard
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -22,8 +22,16 @@ type TripDetails = {
     description: string | null;
     destination: string;
     category: string;
+    timeMode: 'FIXED' | 'FLEXIBLE';
     startDate: string;
     endDate: string;
+    planningStartDate: string | null;
+    planningEndDate: string | null;
+    plannedDurationDays: number | null;
+    participantMode: 'NONE' | 'FIXED' | 'RANGE';
+    participantFixedCount: number | null;
+    participantMinCount: number | null;
+    participantMaxCount: number | null;
     coverImage: string;
     collaborators: Collaborator[];
     itineraryDays: {
@@ -46,6 +54,8 @@ type TripDetails = {
         pricingMode: 'PER_PERSON' | 'GROUP_TOTAL';
         peopleCount: number;
         estimatedCostCents: number;
+        dayStart: number | null;
+        dayEnd: number | null;
         notes: string | null;
     }[];
 };
@@ -54,6 +64,7 @@ type Props = {
     trip: TripDetails;
     canManage: boolean;
     canViewParticipants: boolean;
+    initialTab?: TripTab;
 };
 
 type ItineraryDay = TripDetails['itineraryDays'][number];
@@ -65,7 +76,7 @@ type ItineraryBlock = {
     days: ItineraryDay[];
 };
 
-type TripTab = 'itinerary' | 'explore' | 'budget';
+type TripTab = 'overview' | 'itinerary' | 'explore' | 'budget';
 
 const BUDGET_CATEGORIES = [
     { value: 'TRANSPORT', label: 'Transport' },
@@ -93,6 +104,40 @@ const formatBudgetCategory = (category: string) =>
 const formatBudgetPricingMode = (pricingMode: BudgetItem['pricingMode']) =>
     BUDGET_PRICING_MODES.find((entry) => entry.value === pricingMode)?.label || pricingMode;
 
+const formatBudgetDayRange = (dayStart: number | null, dayEnd: number | null) => {
+    if (dayStart == null || dayEnd == null) {
+        return null;
+    }
+    return dayStart === dayEnd ? `Day ${dayStart}` : `Days ${dayStart}-${dayEnd}`;
+};
+
+const formatTripTimeframe = (trip: Pick<TripDetails, 'timeMode' | 'startDate' | 'endDate' | 'planningStartDate' | 'planningEndDate' | 'plannedDurationDays'>) => {
+    if (trip.timeMode === 'FLEXIBLE') {
+        const planningStart = trip.planningStartDate ? new Date(trip.planningStartDate) : null;
+        const planningEnd = trip.planningEndDate ? new Date(trip.planningEndDate) : null;
+        const windowLabel =
+            planningStart && planningEnd
+                ? `${format(planningStart, 'MMM d')} - ${format(planningEnd, 'MMM d, yyyy')}`
+                : `${format(new Date(trip.startDate), 'MMM d')} - ${format(new Date(trip.endDate), 'MMM d, yyyy')}`;
+        const durationLabel = `${trip.plannedDurationDays ?? 1} day${trip.plannedDurationDays === 1 ? '' : 's'}`;
+        return `Flexible window: ${windowLabel} • Planned duration: ${durationLabel}`;
+    }
+
+    return `${format(new Date(trip.startDate), 'MMM d')} - ${format(new Date(trip.endDate), 'MMM d, yyyy')}`;
+};
+
+const formatPlannedParticipants = (
+    trip: Pick<TripDetails, 'participantMode' | 'participantFixedCount' | 'participantMinCount' | 'participantMaxCount'>
+) => {
+    if (trip.participantMode === 'FIXED' && trip.participantFixedCount != null) {
+        return `${trip.participantFixedCount}`;
+    }
+    if (trip.participantMode === 'RANGE' && trip.participantMinCount != null && trip.participantMaxCount != null) {
+        return `${trip.participantMinCount}-${trip.participantMaxCount}`;
+    }
+    return 'Not specified';
+};
+
 const getBudgetItemTotalCents = (item: BudgetItem) =>
     item.pricingMode === 'PER_PERSON'
         ? item.estimatedCostCents * item.peopleCount
@@ -103,19 +148,25 @@ const getBudgetItemPerPersonCents = (item: BudgetItem) =>
         ? item.estimatedCostCents
         : Math.round(item.estimatedCostCents / Math.max(1, item.peopleCount));
 
-export default function TripDetailsClient({ trip, canManage, canViewParticipants }: Props) {
+export default function TripDetailsClient({ trip, canManage, canViewParticipants, initialTab = 'overview' }: Props) {
     const router = useRouter();
     const pathname = usePathname();
-    const searchParams = useSearchParams();
 
-    const parseTab = (tab: string | null): TripTab => {
-        if (tab === 'explore' || tab === 'budget') {
-            return tab;
+    const getTabFromPathname = (currentPathname: string | null): TripTab => {
+        if (!currentPathname) {
+            return initialTab;
         }
-        return 'itinerary';
+
+        const parts = currentPathname.split('/').filter(Boolean);
+        const lastSegment = parts[parts.length - 1];
+        if (lastSegment === 'itinerary' || lastSegment === 'explore' || lastSegment === 'budget') {
+            return lastSegment;
+        }
+
+        return 'overview';
     };
 
-    const [activeTab, setActiveTab] = useState<TripTab>(() => parseTab(searchParams.get('tab')));
+    const activeTab = getTabFromPathname(pathname);
     const [itineraryDays, setItineraryDays] = useState(trip.itineraryDays);
     const [budgetItems, setBudgetItems] = useState(trip.budgetItems);
     const [showAddDayForm, setShowAddDayForm] = useState(false);
@@ -157,6 +208,8 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
     const [budgetPricingMode, setBudgetPricingMode] = useState<(typeof BUDGET_PRICING_MODES)[number]['value']>('GROUP_TOTAL');
     const [budgetPeopleCount, setBudgetPeopleCount] = useState(1);
     const [budgetEstimatedCost, setBudgetEstimatedCost] = useState('');
+    const [budgetDayStart, setBudgetDayStart] = useState('');
+    const [budgetDayEnd, setBudgetDayEnd] = useState('');
     const [budgetNotes, setBudgetNotes] = useState('');
     const [editingBudgetId, setEditingBudgetId] = useState<string | null>(null);
     const [editBudgetTitle, setEditBudgetTitle] = useState('');
@@ -164,26 +217,21 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
     const [editBudgetPricingMode, setEditBudgetPricingMode] = useState<(typeof BUDGET_PRICING_MODES)[number]['value']>('GROUP_TOTAL');
     const [editBudgetPeopleCount, setEditBudgetPeopleCount] = useState(1);
     const [editBudgetEstimatedCost, setEditBudgetEstimatedCost] = useState('');
+    const [editBudgetDayStart, setEditBudgetDayStart] = useState('');
+    const [editBudgetDayEnd, setEditBudgetDayEnd] = useState('');
     const [editBudgetNotes, setEditBudgetNotes] = useState('');
     const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({});
+    const [collapsedBudgetCategories, setCollapsedBudgetCategories] = useState<Record<string, boolean>>({});
     const [itineraryError, setItineraryError] = useState('');
     const [budgetError, setBudgetError] = useState('');
 
-    useEffect(() => {
-        const tabFromUrl = parseTab(searchParams.get('tab'));
-        setActiveTab(tabFromUrl);
-    }, [searchParams]);
-
     const navigateToTab = (tab: TripTab) => {
-        setActiveTab(tab);
-        const params = new URLSearchParams(searchParams.toString());
-        if (tab === 'itinerary') {
-            params.delete('tab');
-        } else {
-            params.set('tab', tab);
+        const targetPath = tab === 'overview'
+            ? `/trip/${trip.id}`
+            : `/trip/${trip.id}/${tab}`;
+        if (pathname !== targetPath) {
+            router.push(targetPath, { scroll: false });
         }
-        const queryString = params.toString();
-        router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
     };
 
     const sortedItinerary = useMemo(
@@ -277,6 +325,76 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
             .sort((a, b) => b.totalCents - a.totalCents);
     }, [budgetItems]);
 
+    const groupedBudgetItems = useMemo(() => {
+        const groupMap = new globalThis.Map<string, BudgetItem[]>();
+        budgetItems.forEach((item) => {
+            const existing = groupMap.get(item.category) || [];
+            groupMap.set(item.category, [...existing, item]);
+        });
+
+        const categoryOrder = new globalThis.Map<string, number>(
+            BUDGET_CATEGORIES.map((entry, index) => [entry.value, index])
+        );
+
+        return Array.from(groupMap.entries())
+            .map(([category, items]) => ({
+                category,
+                items: [...items].sort((a, b) => {
+                    const aStart = a.dayStart ?? Number.MAX_SAFE_INTEGER;
+                    const bStart = b.dayStart ?? Number.MAX_SAFE_INTEGER;
+                    if (aStart !== bStart) {
+                        return aStart - bStart;
+                    }
+                    const aEnd = a.dayEnd ?? Number.MAX_SAFE_INTEGER;
+                    const bEnd = b.dayEnd ?? Number.MAX_SAFE_INTEGER;
+                    if (aEnd !== bEnd) {
+                        return aEnd - bEnd;
+                    }
+                    return a.title.localeCompare(b.title);
+                }),
+                totalCents: items.reduce((sum, item) => sum + getBudgetItemTotalCents(item), 0),
+                perPersonCents: items.reduce((sum, item) => sum + getBudgetItemPerPersonCents(item), 0),
+            }))
+            .sort((a, b) => {
+                const aOrder = categoryOrder.get(a.category) ?? Number.MAX_SAFE_INTEGER;
+                const bOrder = categoryOrder.get(b.category) ?? Number.MAX_SAFE_INTEGER;
+                if (aOrder !== bOrder) {
+                    return aOrder - bOrder;
+                }
+                return a.category.localeCompare(b.category);
+            });
+    }, [budgetItems]);
+
+    const tripDurationDays = useMemo(() => {
+        if (trip.timeMode === 'FLEXIBLE') {
+            return Math.max(1, trip.plannedDurationDays ?? 1);
+        }
+        const start = new Date(trip.startDate);
+        const end = new Date(trip.endDate);
+        const diffMs = end.getTime() - start.getTime();
+        if (Number.isNaN(diffMs)) {
+            return 0;
+        }
+        return Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1);
+    }, [trip.timeMode, trip.plannedDurationDays, trip.startDate, trip.endDate]);
+
+    const totalActivities = useMemo(
+        () => itineraryDays.reduce((sum, day) => sum + day.activities.length, 0),
+        [itineraryDays]
+    );
+
+    const uniqueTagsCount = useMemo(() => {
+        const uniqueTags = new Set<string>();
+        itineraryDays.forEach((day) => {
+            day.tags.forEach((tag) => {
+                if (tag.trim().length > 0) {
+                    uniqueTags.add(tag.trim().toLowerCase());
+                }
+            });
+        });
+        return uniqueTags.size;
+    }, [itineraryDays]);
+
     const toggleDayActivities = (dayId: string) => {
         setCollapsedDays((prev) => ({
             ...prev,
@@ -298,6 +416,13 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
             nextState[day.id] = nextCollapsedState;
         });
         setCollapsedDays(nextState);
+    };
+
+    const toggleBudgetCategory = (category: string) => {
+        setCollapsedBudgetCategories((prev) => ({
+            ...prev,
+            [category]: !(prev[category] ?? false),
+        }));
     };
 
     const handleAddDay = async (e: FormEvent) => {
@@ -773,6 +898,8 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         setBudgetPricingMode('GROUP_TOTAL');
         setBudgetPeopleCount(1);
         setBudgetEstimatedCost('');
+        setBudgetDayStart('');
+        setBudgetDayEnd('');
         setBudgetNotes('');
         setShowAddBudgetForm(false);
     };
@@ -785,6 +912,8 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         setEditBudgetPricingMode(item.pricingMode);
         setEditBudgetPeopleCount(item.peopleCount);
         setEditBudgetEstimatedCost((item.estimatedCostCents / 100).toFixed(2));
+        setEditBudgetDayStart(item.dayStart == null ? '' : String(item.dayStart));
+        setEditBudgetDayEnd(item.dayEnd == null ? '' : String(item.dayEnd));
         setEditBudgetNotes(item.notes || '');
     };
 
@@ -795,6 +924,8 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         setEditBudgetPricingMode('GROUP_TOTAL');
         setEditBudgetPeopleCount(1);
         setEditBudgetEstimatedCost('');
+        setEditBudgetDayStart('');
+        setEditBudgetDayEnd('');
         setEditBudgetNotes('');
         setBudgetError('');
     };
@@ -816,6 +947,8 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                     pricingMode: budgetPricingMode,
                     peopleCount: budgetPeopleCount,
                     estimatedCost: budgetEstimatedCost,
+                    dayStart: budgetDayStart,
+                    dayEnd: budgetDayEnd,
                     notes: budgetNotes,
                 }),
             });
@@ -835,6 +968,8 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                     pricingMode: data.budgetItem.pricingMode as 'PER_PERSON' | 'GROUP_TOTAL',
                     peopleCount: data.budgetItem.peopleCount as number,
                     estimatedCostCents: data.budgetItem.estimatedCostCents as number,
+                    dayStart: (data.budgetItem.dayStart as number | null) ?? null,
+                    dayEnd: (data.budgetItem.dayEnd as number | null) ?? null,
                     notes: (data.budgetItem.notes as string | null) || null,
                 },
             ]);
@@ -863,6 +998,8 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                     pricingMode: editBudgetPricingMode,
                     peopleCount: editBudgetPeopleCount,
                     estimatedCost: editBudgetEstimatedCost,
+                    dayStart: editBudgetDayStart,
+                    dayEnd: editBudgetDayEnd,
                     notes: editBudgetNotes,
                 }),
             });
@@ -883,6 +1020,8 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                               pricingMode: data.budgetItem.pricingMode as 'PER_PERSON' | 'GROUP_TOTAL',
                               peopleCount: data.budgetItem.peopleCount as number,
                               estimatedCostCents: data.budgetItem.estimatedCostCents as number,
+                              dayStart: (data.budgetItem.dayStart as number | null) ?? null,
+                              dayEnd: (data.budgetItem.dayEnd as number | null) ?? null,
                               notes: (data.budgetItem.notes as string | null) || null,
                           }
                         : item
@@ -929,7 +1068,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
     return (
         <div className="min-h-screen bg-slate-50 relative pb-20">
-            <div className="h-64 sm:h-80 relative overflow-hidden">
+            <div className="h-44 sm:h-52 relative overflow-hidden">
                 <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/20 to-black/60 z-10"></div>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -966,26 +1105,23 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                     </div>
                 </div>
 
-                <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 lg:p-8 z-20 max-w-7xl mx-auto w-full">
-                    <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+                <div className="absolute bottom-0 left-0 right-0 p-2.5 sm:p-3 lg:p-4 z-40 max-w-7xl mx-auto w-full">
+                    <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
                         <div>
-                            <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">{trip.title}</h1>
-                            {trip.description && (
-                                <p className="mb-3 max-w-2xl text-sm sm:text-base text-white/85">{trip.description}</p>
-                            )}
-                            <div className="mb-3">
+                            <h1 className="text-2xl sm:text-3xl font-bold text-white mb-1">{trip.title}</h1>
+                            <div className="mb-2">
                                 <span className="inline-flex items-center rounded-full border border-white/30 bg-white/10 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm">
                                     {trip.category}
                                 </span>
                             </div>
-                            <div className="flex flex-wrap items-center gap-3 sm:gap-6 text-white/90 text-sm">
+                            <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-white/90 text-xs sm:text-sm">
                                 <span className="flex items-center gap-1.5 font-medium">
                                     <MapPin className="h-4 w-4" />
                                     {trip.destination}
                                 </span>
                                 <span className="flex items-center gap-1.5 font-medium">
                                     <Calendar className="h-4 w-4" />
-                                    {format(new Date(trip.startDate), 'MMM d')} - {format(new Date(trip.endDate), 'MMM d, yyyy')}
+                                    {formatTripTimeframe(trip)}
                                 </span>
                             </div>
                         </div>
@@ -1018,10 +1154,17 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                 </div>
             </div>
 
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-6 relative z-30">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 -mt-2 relative z-20">
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col md:flex-row min-h-[500px]">
                     <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-slate-100 bg-slate-50/50 p-4 sm:p-6">
                         <nav className="flex md:flex-col gap-2 overflow-x-auto pb-2 md:pb-0 scrollbar-hide">
+                            <button
+                                onClick={() => navigateToTab('overview')}
+                                className={`flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl font-medium text-sm transition-colors ${activeTab === 'overview' ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
+                            >
+                                <LayoutDashboard className="h-4 w-4" />
+                                Overview
+                            </button>
                             <button
                                 onClick={() => navigateToTab('itinerary')}
                                 className={`flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl font-medium text-sm transition-colors ${activeTab === 'itinerary' ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
@@ -1047,6 +1190,128 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                     </div>
 
                     <div className="flex-1 p-4 sm:p-6 lg:p-8 bg-white">
+                        {activeTab === 'overview' && (
+                            <div className="space-y-6">
+                                <div>
+                                    <h2 className="text-xl font-bold text-slate-800">Trip Overview</h2>
+                                    <p className="mt-1 text-sm text-slate-500">
+                                        Description, itinerary progress, and budget snapshot in one place.
+                                    </p>
+                                </div>
+
+                                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                                    <p className="text-xs uppercase tracking-wide text-slate-500">Description</p>
+                                    <p className="mt-2 text-sm text-slate-700">
+                                        {trip.description?.trim()
+                                            ? trip.description
+                                            : 'No description yet. The owner can add one in trip settings.'}
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Category</p>
+                                        <p className="mt-1 text-xl font-bold text-slate-800">{trip.category}</p>
+                                    </div>
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Duration</p>
+                                        <p className="mt-1 text-xl font-bold text-slate-800">{tripDurationDays} days</p>
+                                    </div>
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Itinerary days</p>
+                                        <p className="mt-1 text-xl font-bold text-slate-800">{itineraryDays.length}</p>
+                                    </div>
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Planned activities</p>
+                                        <p className="mt-1 text-xl font-bold text-slate-800">{totalActivities}</p>
+                                    </div>
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Planned participants</p>
+                                        <p className="mt-1 text-xl font-bold text-slate-800">{formatPlannedParticipants(trip)}</p>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => navigateToTab('itinerary')}
+                                        className="rounded-2xl border border-slate-200 bg-white p-5 text-left transition-colors hover:bg-slate-50"
+                                        aria-label="Open itinerary details"
+                                    >
+                                        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Itinerary Snapshot</h3>
+                                        {groupedItinerary.length === 0 ? (
+                                            <p className="mt-3 text-sm text-slate-500">No travel days added yet.</p>
+                                        ) : (
+                                            <div className="mt-4 space-y-3">
+                                                {groupedItinerary.slice(0, 3).map((block) => {
+                                                    const representativeDay = block.days[0];
+                                                    const blockLabel =
+                                                        block.days.length > 1
+                                                            ? `Days ${block.start}-${block.end}`
+                                                            : `Day ${block.start}`;
+
+                                                    return (
+                                                    <div key={block.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                                        <p className="text-sm font-semibold text-slate-800">{blockLabel}</p>
+                                                        <p className="mt-0.5 text-sm text-slate-600">{representativeDay.location}</p>
+                                                        <p className="mt-1 text-xs text-slate-500 line-clamp-2">{representativeDay.summary}</p>
+                                                    </div>
+                                                    );
+                                                })}
+                                                {groupedItinerary.length > 3 && (
+                                                    <p className="text-xs text-slate-500">
+                                                        +{groupedItinerary.length - 3} more block(s). Open Itinerary for full details.
+                                                    </p>
+                                                )}
+                                            </div>
+                                        )}
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => navigateToTab('budget')}
+                                        className="rounded-2xl border border-slate-200 bg-white p-5 text-left transition-colors hover:bg-slate-50"
+                                        aria-label="Open budget details"
+                                    >
+                                        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Budget Snapshot</h3>
+                                        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                                <p className="text-xs uppercase tracking-wide text-slate-500">Total estimate</p>
+                                                <p className="mt-1 text-base font-semibold text-slate-800">{formatCurrency(totalBudgetCents)}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                                <p className="text-xs uppercase tracking-wide text-slate-500">Per person</p>
+                                                <p className="mt-1 text-base font-semibold text-slate-800">{formatCurrency(totalBudgetPerPersonCents)}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                                <p className="text-xs uppercase tracking-wide text-slate-500">Budget items</p>
+                                                <p className="mt-1 text-base font-semibold text-slate-800">{budgetItems.length}</p>
+                                            </div>
+                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                                <p className="text-xs uppercase tracking-wide text-slate-500">Used tags</p>
+                                                <p className="mt-1 text-base font-semibold text-slate-800">{uniqueTagsCount}</p>
+                                            </div>
+                                        </div>
+                                        {budgetItemsByCategory.length > 0 && (
+                                            <div className="mt-4">
+                                                <p className="text-xs uppercase tracking-wide text-slate-500">Top budget categories</p>
+                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                    {budgetItemsByCategory.slice(0, 3).map((entry) => (
+                                                        <span
+                                                            key={entry.category}
+                                                            className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700"
+                                                        >
+                                                            {formatBudgetCategory(entry.category)}: {formatCurrency(entry.totalCents)}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
                         {activeTab === 'itinerary' && (
                             <div className="space-y-8">
                                 <div className="flex items-center justify-between mb-6">
@@ -1635,6 +1900,30 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                     className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                                                 />
                                             </div>
+                                            <div>
+                                                <label htmlFor="budget-day-start" className="block text-sm font-medium text-slate-700">From travel day</label>
+                                                <input
+                                                    id="budget-day-start"
+                                                    type="number"
+                                                    min={1}
+                                                    value={budgetDayStart}
+                                                    onChange={(e) => setBudgetDayStart(e.target.value)}
+                                                    placeholder="optional"
+                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="budget-day-end" className="block text-sm font-medium text-slate-700">To travel day</label>
+                                                <input
+                                                    id="budget-day-end"
+                                                    type="number"
+                                                    min={1}
+                                                    value={budgetDayEnd}
+                                                    onChange={(e) => setBudgetDayEnd(e.target.value)}
+                                                    placeholder="optional"
+                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                />
+                                            </div>
                                         </div>
                                         <div>
                                             <p className="text-xs text-slate-500">
@@ -1676,9 +1965,32 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                         </p>
                                     </div>
                                 ) : (
-                                    <div className="space-y-3">
-                                        {budgetItems.map((item) => (
-                                            <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                    <div className="space-y-4">
+                                        {groupedBudgetItems.map((group) => {
+                                            const isCollapsed = collapsedBudgetCategories[group.category] ?? false;
+
+                                            return (
+                                                <div key={group.category} className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => toggleBudgetCategory(group.category)}
+                                                        className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50 transition-colors"
+                                                    >
+                                                        <div>
+                                                            <p className="text-sm font-semibold text-slate-800">{formatBudgetCategory(group.category)}</p>
+                                                            <p className="mt-1 text-xs text-slate-500">
+                                                                {group.items.length} item(s) • {formatCurrency(group.perPersonCents)}/person • {formatCurrency(group.totalCents)}
+                                                            </p>
+                                                        </div>
+                                                        <span className="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                                                            {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                                                        </span>
+                                                    </button>
+
+                                                    {!isCollapsed && (
+                                                        <div className="space-y-3 border-t border-slate-100 bg-slate-50/40 p-3 sm:p-4">
+                                                            {group.items.map((item) => (
+                                                                <div key={item.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                                                 {editingBudgetId === item.id && canManage ? (
                                                     <form onSubmit={(e) => handleUpdateBudgetItem(e, item.id)} className="space-y-4">
                                                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1748,6 +2060,32 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                 />
                                                             </div>
                                                         </div>
+                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                            <div>
+                                                                <label htmlFor={`edit-budget-day-start-${item.id}`} className="block text-sm font-medium text-slate-700">From travel day</label>
+                                                                <input
+                                                                    id={`edit-budget-day-start-${item.id}`}
+                                                                    type="number"
+                                                                    min={1}
+                                                                    value={editBudgetDayStart}
+                                                                    onChange={(e) => setEditBudgetDayStart(e.target.value)}
+                                                                    placeholder="optional"
+                                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                                />
+                                                            </div>
+                                                            <div>
+                                                                <label htmlFor={`edit-budget-day-end-${item.id}`} className="block text-sm font-medium text-slate-700">To travel day</label>
+                                                                <input
+                                                                    id={`edit-budget-day-end-${item.id}`}
+                                                                    type="number"
+                                                                    min={1}
+                                                                    value={editBudgetDayEnd}
+                                                                    onChange={(e) => setEditBudgetDayEnd(e.target.value)}
+                                                                    placeholder="optional"
+                                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                                />
+                                                            </div>
+                                                        </div>
                                                         <div>
                                                             <p className="text-xs text-slate-500">
                                                                 {editBudgetPricingMode === 'PER_PERSON'
@@ -1789,6 +2127,11 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                         <div>
                                                             <h3 className="text-base font-semibold text-slate-800">{item.title}</h3>
                                                             <p className="mt-1 text-sm text-slate-600">{formatBudgetCategory(item.category)}</p>
+                                                            {formatBudgetDayRange(item.dayStart, item.dayEnd) && (
+                                                                <p className="mt-1 text-xs font-medium text-blue-700">
+                                                                    {formatBudgetDayRange(item.dayStart, item.dayEnd)}
+                                                                </p>
+                                                            )}
                                                             <p className="mt-1 text-sm text-slate-500">
                                                                 {formatBudgetPricingMode(item.pricingMode)} for {item.peopleCount} people
                                                             </p>
@@ -1829,8 +2172,13 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                         </div>
                                                     </div>
                                                 )}
-                                            </div>
-                                        ))}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </div>

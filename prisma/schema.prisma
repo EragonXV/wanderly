@@ -28,8 +28,16 @@ model Trip {
   destinationLat Float?
   destinationLng Float?
   category    String       @default("Sonstiges")
+  timeMode    TripTimeMode @default(FIXED)
   startDate   DateTime
   endDate     DateTime
+  planningStartDate DateTime?
+  planningEndDate DateTime?
+  plannedDurationDays Int?
+  participantMode TripParticipantMode @default(NONE)
+  participantFixedCount Int?
+  participantMinCount Int?
+  participantMaxCount Int?
   coverImage  String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
@@ -100,6 +108,8 @@ model TripBudgetItem {
   pricingMode        BudgetPricingMode @default(GROUP_TOTAL)
   peopleCount        Int      @default(1)
   estimatedCostCents Int
+  dayStart           Int?
+  dayEnd             Int?
   notes              String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -118,4 +128,15 @@ enum ActivityType {
   LODGING
   FOOD
   ACTIVITY
+}
+
+enum TripTimeMode {
+  FIXED
+  FLEXIBLE
+}
+
+enum TripParticipantMode {
+  NONE
+  FIXED
+  RANGE
 }

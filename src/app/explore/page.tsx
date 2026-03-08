@@ -22,8 +22,12 @@ type ExploreTrip = {
   title: string;
   destination: string;
   category: string;
+  timeMode: 'FIXED' | 'FLEXIBLE';
   startDate: Date;
   endDate: Date;
+  planningStartDate: Date | null;
+  planningEndDate: Date | null;
+  plannedDurationDays: number | null;
   coverImage: string | null;
   _count: {
     members: number;
@@ -197,7 +201,12 @@ export default async function ExplorePage({ searchParams }: ExplorePageProps) {
                   <div className="flex items-center gap-2 text-slate-600">
                     <Calendar className="h-4 w-4 text-blue-500 shrink-0" />
                     <span className="text-sm">
-                      {format(trip.startDate, 'MMM d')} - {format(trip.endDate, 'MMM d, yyyy')}
+                      {trip.timeMode === 'FLEXIBLE'
+                        ? `Flexible: ${format(trip.planningStartDate || trip.startDate, 'MMM d')} - ${format(
+                            trip.planningEndDate || trip.endDate,
+                            'MMM d, yyyy'
+                          )} (${trip.plannedDurationDays ?? 1} days)`
+                        : `${format(trip.startDate, 'MMM d')} - ${format(trip.endDate, 'MMM d, yyyy')}`}
                     </span>
                   </div>
                 </div>
