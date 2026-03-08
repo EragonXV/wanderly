@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth/authOptions';
 import { prisma } from '@/lib/prisma/client';
 import { lookupPlaceById } from '@/lib/places/nominatim';
+import { authorizeTripMutation } from '@/lib/trips/apiAuthorization';
+import { createTripSystemMessage } from '@/lib/trips/chatMessages';
 
 type Context = {
     params: Promise<{ id: string }>;
@@ -85,14 +85,11 @@ const tripClient = (prisma as unknown as {
 
 export async function PATCH(req: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id } = await context.params;
+        const auth = await authorizeTripMutation(id, 'MANAGE_TRIP_SETTINGS');
+        if (!auth.ok) {
+            return auth.response;
+        }
         const {
             title,
             destination,
@@ -203,23 +200,6 @@ export async function PATCH(req: Request, context: Context) {
             return NextResponse.json({ message: 'Please select a valid place from suggestions' }, { status: 400 });
         }
 
-        const ownerMembership = await prisma.tripMember.findUnique({
-            where: {
-                tripId_userId: {
-                    tripId: id,
-                    userId,
-                },
-            },
-        });
-
-        if (!ownerMembership) {
-            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
-        }
-
-        if (ownerMembership.role !== 'OWNER') {
-            return NextResponse.json({ message: 'Only the owner can update this trip' }, { status: 403 });
-        }
-
         const trip = await tripClient.update({
             where: { id },
             data: {
@@ -263,6 +243,8 @@ export async function PATCH(req: Request, context: Context) {
             },
         });
 
+        await createTripSystemMessage(id, `Reisedaten wurden aktualisiert: ${trip.title}.`);
+
         return NextResponse.json({ trip }, { status: 200 });
     } catch (error) {
         console.error('Update trip error:', error);
@@ -272,30 +254,10 @@ export async function PATCH(req: Request, context: Context) {
 
 export async function DELETE(_: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id } = await context.params;
-
-        const ownerMembership = await prisma.tripMember.findUnique({
-            where: {
-                tripId_userId: {
-                    tripId: id,
-                    userId,
-                },
-            },
-        });
-
-        if (!ownerMembership) {
-            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
-        }
-
-        if (ownerMembership.role !== 'OWNER') {
-            return NextResponse.json({ message: 'Only the owner can delete this trip' }, { status: 403 });
+        const auth = await authorizeTripMutation(id, 'DELETE_TRIP');
+        if (!auth.ok) {
+            return auth.response;
         }
 
         await prisma.trip.delete({

@@ -13,10 +13,17 @@ model User {
   email         String?   @unique
   emailVerified DateTime?
   image         String?
+  birthDate     DateTime?
+  country       String?
+  bio           String?
   password      String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   tripMemberships TripMember[]
+  tripInvitations TripInvitation[]
+  sentTripInvitations TripInvitation[] @relation("TripInvitationSender")
+  notifications Notification[]
+  tripChatMessages TripChatMessage[]
 }
 
 model Trip {
@@ -42,6 +49,9 @@ model Trip {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   members     TripMember[]
+  invitations TripInvitation[]
+  notifications Notification[]
+  chatMessages TripChatMessage[]
   itineraryDays TripItineraryDay[]
   budgetItems TripBudgetItem[]
 }
@@ -60,7 +70,85 @@ model TripMember {
 
 enum TripRole {
   OWNER
+  ADMIN
   MEMBER
+}
+
+model TripInvitation {
+  id              String               @id @default(cuid())
+  tripId           String
+  userId           String
+  invitedByUserId  String
+  status           TripInvitationStatus @default(PENDING)
+  expiresAt        DateTime
+  respondedAt      DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  trip             Trip                 @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy        User                 @relation("TripInvitationSender", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([tripId, userId])
+  @@index([userId, status])
+  @@index([tripId, status])
+}
+
+enum TripInvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+model Notification {
+  id           String           @id @default(cuid())
+  userId       String
+  tripId       String?
+  invitationId String?
+  type         NotificationType
+  title        String
+  message      String
+  link         String?
+  isRead       Boolean          @default(false)
+  readAt       DateTime?
+  createdAt    DateTime         @default(now())
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trip         Trip?            @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+  @@index([tripId, createdAt])
+  @@index([invitationId])
+}
+
+enum NotificationType {
+  INVITATION_RECEIVED
+  INVITATION_ACCEPTED
+  INVITATION_DECLINED
+  TRIP_UPDATED
+  ITINERARY_UPDATED
+  BUDGET_UPDATED
+  PARTICIPANTS_UPDATED
+  ROLE_UPDATED
+}
+
+model TripChatMessage {
+  id        String              @id @default(cuid())
+  tripId    String
+  userId    String?
+  type      TripChatMessageType @default(USER)
+  content   String
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  trip      Trip                @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user      User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tripId, createdAt])
+  @@index([userId, createdAt])
+}
+
+enum TripChatMessageType {
+  USER
+  SYSTEM
 }
 
 model TripItineraryDay {

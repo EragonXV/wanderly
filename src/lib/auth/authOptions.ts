@@ -40,6 +40,7 @@ export const authOptions: NextAuthOptions = {
                     id: user.id,
                     email: user.email,
                     name: user.name,
+                    image: user.image,
                 };
             },
         }),
@@ -51,15 +52,53 @@ export const authOptions: NextAuthOptions = {
         signIn: '/login',
     },
     callbacks: {
-        async jwt({ token, user }) {
+        async jwt({ token, user, trigger, session }) {
             if (user) {
                 token.id = user.id;
+                token.name = user.name;
+                token.email = user.email;
+                token.picture = user.image ?? null;
             }
+
+            if (trigger === 'update' && session) {
+                const nextName =
+                    typeof session.user?.name === 'string'
+                        ? session.user.name
+                        : typeof session.name === 'string'
+                            ? session.name
+                            : undefined;
+                const nextEmail =
+                    typeof session.user?.email === 'string'
+                        ? session.user.email
+                        : typeof session.email === 'string'
+                            ? session.email
+                            : undefined;
+                const nextImage =
+                    session.user?.image === null || typeof session.user?.image === 'string'
+                        ? session.user.image
+                        : session.image === null || typeof session.image === 'string'
+                            ? session.image
+                            : undefined;
+
+                if (typeof nextName === 'string') {
+                    token.name = nextName;
+                }
+                if (typeof nextEmail === 'string') {
+                    token.email = nextEmail;
+                }
+                if (nextImage !== undefined) {
+                    token.picture = nextImage;
+                }
+            }
+
             return token;
         },
         async session({ session, token }) {
             if (session.user) {
                 session.user.id = token.id as string;
+                session.user.name = (token.name as string | null | undefined) ?? session.user.name;
+                session.user.email = (token.email as string | null | undefined) ?? session.user.email;
+                session.user.image = (token.picture as string | null | undefined) ?? null;
             }
             return session;
         },

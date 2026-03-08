@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Trash2 } from 'lucide-react';
@@ -95,6 +95,20 @@ export default function TripSettingsClient({
     const [isDeletingTrip, setIsDeletingTrip] = useState(false);
     const [success, setSuccess] = useState('');
     const [error, setError] = useState('');
+    const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
+
+    const adjustDescriptionHeight = () => {
+        const el = descriptionRef.current;
+        if (!el) {
+            return;
+        }
+        el.style.height = 'auto';
+        el.style.height = `${el.scrollHeight}px`;
+    };
+
+    useEffect(() => {
+        adjustDescriptionHeight();
+    }, [description]);
 
     useEffect(() => {
         if (destinationPlaceId) {
@@ -379,10 +393,14 @@ export default function TripSettingsClient({
                         </label>
                         <textarea
                             id="description"
-                            rows={4}
+                            ref={descriptionRef}
+                            rows={6}
                             value={description}
-                            onChange={(e) => setDescription(e.target.value)}
-                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                            onChange={(e) => {
+                                setDescription(e.target.value);
+                                adjustDescriptionHeight();
+                            }}
+                            className="mt-1 min-h-[9rem] w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors resize-y"
                             placeholder="Describe this trip..."
                         />
                     </div>

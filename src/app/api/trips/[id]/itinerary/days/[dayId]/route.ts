@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth/authOptions';
 import { prisma } from '@/lib/prisma/client';
+import { authorizeTripMutation } from '@/lib/trips/apiAuthorization';
+import { createTripSystemMessage } from '@/lib/trips/chatMessages';
 
 type Context = {
     params: Promise<{ id: string; dayId: string }>;
@@ -9,14 +9,11 @@ type Context = {
 
 export async function PATCH(req: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id: tripId, dayId } = await context.params;
+        const auth = await authorizeTripMutation(tripId, 'EDIT_ITINERARY');
+        if (!auth.ok) {
+            return auth.response;
+        }
         const { dayNumber, summary, location, tags, blockDayIds, blockLength } = await req.json();
 
         const parsedDayNumber = Number(dayNumber);
@@ -50,25 +47,8 @@ export async function PATCH(req: Request, context: Context) {
             );
         }
 
-        if (!parsedSummary || !parsedLocation) {
-            return NextResponse.json({ message: 'Summary and location are required' }, { status: 400 });
-        }
-
-        const membership = await prisma.tripMember.findUnique({
-            where: {
-                tripId_userId: {
-                    tripId,
-                    userId,
-                },
-            },
-        });
-
-        if (!membership) {
-            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
-        }
-
-        if (membership.role !== 'OWNER') {
-            return NextResponse.json({ message: 'Only the owner can edit itinerary' }, { status: 403 });
+        if (!parsedLocation) {
+            return NextResponse.json({ message: 'Location is required' }, { status: 400 });
         }
 
         const existingDay = await prisma.tripItineraryDay.findFirst({
@@ -259,6 +239,13 @@ export async function PATCH(req: Request, context: Context) {
             return days;
         });
 
+        await createTripSystemMessage(
+            tripId,
+            updatedDay.length > 1
+                ? 'Ein Tagesblock wurde bearbeitet.'
+                : `Tag ${updatedDay[0]?.dayNumber ?? ''} wurde bearbeitet.`
+        );
+
         if (updatedDay.length === 1) {
             return NextResponse.json({ day: updatedDay[0], days: updatedDay }, { status: 200 });
         }
@@ -288,14 +275,11 @@ export async function PATCH(req: Request, context: Context) {
 
 export async function DELETE(req: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id: tripId, dayId } = await context.params;
+        const auth = await authorizeTripMutation(tripId, 'EDIT_ITINERARY');
+        if (!auth.ok) {
+            return auth.response;
+        }
 
         let parsedBody: unknown = {};
         try {
@@ -317,23 +301,6 @@ export async function DELETE(req: Request, context: Context) {
                     .filter((value) => value.length > 0)
             )
         );
-
-        const membership = await prisma.tripMember.findUnique({
-            where: {
-                tripId_userId: {
-                    tripId,
-                    userId,
-                },
-            },
-        });
-
-        if (!membership) {
-            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
-        }
-
-        if (membership.role !== 'OWNER') {
-            return NextResponse.json({ message: 'Only the owner can edit itinerary' }, { status: 403 });
-        }
 
         const requestedDayIds =
             parsedBlockDayIds.length > 0 && parsedBlockDayIds.includes(dayId)
@@ -381,6 +348,13 @@ export async function DELETE(req: Request, context: Context) {
                 },
             },
         });
+
+        await createTripSystemMessage(
+            tripId,
+            targetDays.length > 1
+                ? `${targetDays.length} Tage wurden gelöscht.`
+                : `Tag ${targetDays[0]?.dayNumber ?? ''} wurde gelöscht.`
+        );
 
         return NextResponse.json(
             {

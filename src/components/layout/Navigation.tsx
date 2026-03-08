@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Plane, User, Menu, LogOut } from 'lucide-react';
+import { Plane, Menu, LogOut } from 'lucide-react';
 import { useSession, signOut } from 'next-auth/react';
+import { UserAvatar } from '@/components/ui/UserAvatar';
 
 export function Navigation() {
   const { data: session, status } = useSession();
@@ -33,7 +34,18 @@ export function Navigation() {
             <div className="flex items-center gap-4 pl-4 border-l border-gray-200">
               {!isLoading && user ? (
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-slate-700">Hi, {user.name}</span>
+                  <Link
+                    href="/user"
+                    className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 hover:text-blue-600 transition-colors"
+                  >
+                    <UserAvatar
+                      name={user.name}
+                      image={user.image}
+                      sizeClassName="h-7 w-7"
+                      textClassName="text-xs"
+                    />
+                    {user.name ?? 'User'}
+                  </Link>
                   <button
                     onClick={() => signOut({ callbackUrl: '/' })}
                     className="flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-800 transition-colors"
@@ -56,9 +68,21 @@ export function Navigation() {
           </div>
 
           <div className="flex items-center md:hidden">
-            <button className="text-gray-600 hover:text-blue-600 transition-colors">
-              <Menu className="h-6 w-6" />
-            </button>
+            {!isLoading && user ? (
+              <Link href="/user" className="inline-flex items-center">
+                <UserAvatar
+                  name={user.name}
+                  image={user.image}
+                  sizeClassName="h-8 w-8"
+                  textClassName="text-xs"
+                  className="ring-1 ring-slate-200"
+                />
+              </Link>
+            ) : (
+              <button className="text-gray-600 hover:text-blue-600 transition-colors">
+                <Menu className="h-6 w-6" />
+              </button>
+            )}
           </div>
         </div>
       </div>

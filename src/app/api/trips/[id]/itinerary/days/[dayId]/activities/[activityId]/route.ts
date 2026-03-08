@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth/authOptions';
 import { prisma } from '@/lib/prisma/client';
+import { authorizeTripMutation } from '@/lib/trips/apiAuthorization';
+import { createTripSystemMessage } from '@/lib/trips/chatMessages';
 
 type Context = {
     params: Promise<{ id: string; dayId: string; activityId: string }>;
@@ -10,37 +10,13 @@ type Context = {
 const ACTIVITY_TYPES = ['FLIGHT', 'LODGING', 'FOOD', 'ACTIVITY'] as const;
 const TIME_24H_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
-async function assertOwner(tripId: string, userId: string) {
-    const membership = await prisma.tripMember.findUnique({
-        where: {
-            tripId_userId: {
-                tripId,
-                userId,
-            },
-        },
-    });
-
-    if (!membership) {
-        return { ok: false as const, status: 404, message: 'Trip not found' };
-    }
-
-    if (membership.role !== 'OWNER') {
-        return { ok: false as const, status: 403, message: 'Only the owner can edit itinerary' };
-    }
-
-    return { ok: true as const };
-}
-
 export async function PATCH(req: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id: tripId, dayId, activityId } = await context.params;
+        const auth = await authorizeTripMutation(tripId, 'EDIT_ITINERARY');
+        if (!auth.ok) {
+            return auth.response;
+        }
         const { time, title, type } = await req.json();
 
         const parsedTime = typeof time === 'string' ? time.trim() : '';
@@ -57,11 +33,6 @@ export async function PATCH(req: Request, context: Context) {
 
         if (!ACTIVITY_TYPES.includes(parsedType as (typeof ACTIVITY_TYPES)[number])) {
             return NextResponse.json({ message: 'Invalid activity type' }, { status: 400 });
-        }
-
-        const ownerCheck = await assertOwner(tripId, userId);
-        if (!ownerCheck.ok) {
-            return NextResponse.json({ message: ownerCheck.message }, { status: ownerCheck.status });
         }
 
         const activity = await prisma.tripItineraryActivity.findFirst({
@@ -88,6 +59,8 @@ export async function PATCH(req: Request, context: Context) {
             },
         });
 
+        await createTripSystemMessage(tripId, `Aktivität geändert: ${parsedTime} • ${parsedTitle}`);
+
         return NextResponse.json({ activity: updated }, { status: 200 });
     } catch (error) {
         console.error('Update itinerary activity error:', error);
@@ -97,18 +70,10 @@ export async function PATCH(req: Request, context: Context) {
 
 export async function DELETE(_: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id: tripId, dayId, activityId } = await context.params;
-
-        const ownerCheck = await assertOwner(tripId, userId);
-        if (!ownerCheck.ok) {
-            return NextResponse.json({ message: ownerCheck.message }, { status: ownerCheck.status });
+        const auth = await authorizeTripMutation(tripId, 'EDIT_ITINERARY');
+        if (!auth.ok) {
+            return auth.response;
         }
 
         const activity = await prisma.tripItineraryActivity.findFirst({
@@ -129,6 +94,8 @@ export async function DELETE(_: Request, context: Context) {
         await prisma.tripItineraryActivity.delete({
             where: { id: activityId },
         });
+
+        await createTripSystemMessage(tripId, 'Eine Aktivität wurde aus der Planung entfernt.');
 
         return NextResponse.json({ message: 'Activity deleted' }, { status: 200 });
     } catch (error) {

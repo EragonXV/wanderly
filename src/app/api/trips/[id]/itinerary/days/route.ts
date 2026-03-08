@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth/authOptions';
 import { prisma } from '@/lib/prisma/client';
+import { authorizeTripMutation } from '@/lib/trips/apiAuthorization';
+import { createTripSystemMessage } from '@/lib/trips/chatMessages';
 
 type Context = {
     params: Promise<{ id: string }>;
@@ -9,14 +9,11 @@ type Context = {
 
 export async function POST(req: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id: tripId } = await context.params;
+        const auth = await authorizeTripMutation(tripId, 'EDIT_ITINERARY');
+        if (!auth.ok) {
+            return auth.response;
+        }
         const { dayNumber, summary, location, tags, blockLength } = await req.json();
 
         const parsedDayNumber = Number(dayNumber);
@@ -41,28 +38,11 @@ export async function POST(req: Request, context: Context) {
             );
         }
 
-        if (!parsedSummary || !parsedLocation) {
+        if (!parsedLocation) {
             return NextResponse.json(
-                { message: 'Summary and location are required' },
+                { message: 'Location is required' },
                 { status: 400 }
             );
-        }
-
-        const membership = await prisma.tripMember.findUnique({
-            where: {
-                tripId_userId: {
-                    tripId,
-                    userId,
-                },
-            },
-        });
-
-        if (!membership) {
-            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
-        }
-
-        if (membership.role !== 'OWNER') {
-            return NextResponse.json({ message: 'Only the owner can edit itinerary' }, { status: 403 });
         }
 
         const targetDayNumbers = Array.from(
@@ -114,6 +94,13 @@ export async function POST(req: Request, context: Context) {
                     },
                 })
             )
+        );
+
+        await createTripSystemMessage(
+            tripId,
+            days.length > 1
+                ? `Es wurden ${days.length} neue Planungstage hinzugefügt.`
+                : 'Ein neuer Planungstag wurde hinzugefügt.'
         );
 
         return NextResponse.json({ days }, { status: 201 });

@@ -28,7 +28,7 @@ type TripSettingsData = {
     coverImage: string | null;
     members: {
         userId: string;
-        role: 'OWNER' | 'MEMBER';
+        role: 'OWNER' | 'ADMIN' | 'MEMBER';
     }[];
 };
 

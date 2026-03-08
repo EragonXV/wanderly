@@ -1,19 +1,21 @@
 'use client';
 
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
+import { UserAvatar } from '@/components/ui/UserAvatar';
+import TripChatPanel from '@/components/trips/TripChatPanel';
 import {
     ArrowLeft, Calendar, MapPin, Users, Settings, Plus,
-    Coffee, Map, Camera, Utensils, ChevronDown, ChevronRight, LayoutDashboard
+    Calculator, Map, Camera, Utensils, ChevronDown, ChevronRight, FileText, UserRoundPlus, Car, Plane, House, Trash2, MessageCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
 
 type Collaborator = {
     id: string;
     name: string;
-    initial: string;
-    color: string;
+    image: string | null;
 };
 
 type TripDetails = {
@@ -58,11 +60,26 @@ type TripDetails = {
         dayEnd: number | null;
         notes: string | null;
     }[];
+    chatMessages: {
+        id: string;
+        type: 'USER' | 'SYSTEM';
+        content: string;
+        createdAt: string;
+        user: {
+            id: string;
+            name: string | null;
+            email: string | null;
+            image: string | null;
+        } | null;
+    }[];
 };
 
 type Props = {
     trip: TripDetails;
+    currentUserId: string;
     canManage: boolean;
+    canManageParticipants: boolean;
+    canManageTripSettings: boolean;
     canViewParticipants: boolean;
     initialTab?: TripTab;
 };
@@ -75,8 +92,18 @@ type ItineraryBlock = {
     end: number;
     days: ItineraryDay[];
 };
+type ItineraryTimelineItem =
+    | { kind: 'planned'; block: ItineraryBlock }
+    | { kind: 'missing'; start: number; end: number };
+type PlaceSuggestion = {
+    placeId: string;
+    name: string;
+    displayName: string;
+    lat: number;
+    lng: number;
+};
 
-type TripTab = 'overview' | 'itinerary' | 'explore' | 'budget';
+type TripTab = 'overview' | 'itinerary' | 'explore' | 'budget' | 'chat';
 
 const BUDGET_CATEGORIES = [
     { value: 'TRANSPORT', label: 'Transport' },
@@ -88,9 +115,11 @@ const BUDGET_CATEGORIES = [
 ] as const;
 
 const BUDGET_PRICING_MODES = [
-    { value: 'GROUP_TOTAL', label: 'Total for group' },
-    { value: 'PER_PERSON', label: 'Fixed per person' },
+    { value: 'GROUP_TOTAL', label: 'Für Gruppe' },
+    { value: 'PER_PERSON', label: 'Pro Person' },
 ] as const;
+
+const BUDGET_CHART_COLORS = ['#2563EB', '#DC2626', '#16A34A', '#D97706', '#7C3AED', '#0891B2', '#4B5563'];
 
 const formatCurrency = (cents: number) =>
     new Intl.NumberFormat('de-DE', {
@@ -101,32 +130,39 @@ const formatCurrency = (cents: number) =>
 const formatBudgetCategory = (category: string) =>
     BUDGET_CATEGORIES.find((entry) => entry.value === category)?.label || category;
 
-const formatBudgetPricingMode = (pricingMode: BudgetItem['pricingMode']) =>
-    BUDGET_PRICING_MODES.find((entry) => entry.value === pricingMode)?.label || pricingMode;
-
-const formatBudgetDayRange = (dayStart: number | null, dayEnd: number | null) => {
-    if (dayStart == null || dayEnd == null) {
-        return null;
+const getBudgetCategoryIcon = (category: string) => {
+    switch (category) {
+        case 'TRANSPORT':
+            return { Icon: Car, className: 'text-sky-600' };
+        case 'ACCOMMODATION':
+            return { Icon: House, className: 'text-indigo-600' };
+        case 'FOOD':
+            return { Icon: Utensils, className: 'text-emerald-600' };
+        case 'ACTIVITIES':
+            return { Icon: Camera, className: 'text-violet-600' };
+        case 'INSURANCE':
+            return { Icon: UserRoundPlus, className: 'text-amber-600' };
+        default:
+            return { Icon: Plane, className: 'text-slate-500' };
     }
-    return dayStart === dayEnd ? `Day ${dayStart}` : `Days ${dayStart}-${dayEnd}`;
 };
 
 const formatTripTimeframe = (trip: Pick<TripDetails, 'timeMode' | 'startDate' | 'endDate' | 'planningStartDate' | 'planningEndDate' | 'plannedDurationDays'>) => {
     if (trip.timeMode === 'FLEXIBLE') {
         const planningStart = trip.planningStartDate ? new Date(trip.planningStartDate) : null;
         const planningEnd = trip.planningEndDate ? new Date(trip.planningEndDate) : null;
-        const windowLabel =
+        const rangeLabel =
             planningStart && planningEnd
                 ? `${format(planningStart, 'MMM d')} - ${format(planningEnd, 'MMM d, yyyy')}`
                 : `${format(new Date(trip.startDate), 'MMM d')} - ${format(new Date(trip.endDate), 'MMM d, yyyy')}`;
         const durationLabel = `${trip.plannedDurationDays ?? 1} day${trip.plannedDurationDays === 1 ? '' : 's'}`;
-        return `Flexible window: ${windowLabel} • Planned duration: ${durationLabel}`;
+        return `${rangeLabel} (${durationLabel})`;
     }
 
     return `${format(new Date(trip.startDate), 'MMM d')} - ${format(new Date(trip.endDate), 'MMM d, yyyy')}`;
 };
 
-const formatPlannedParticipants = (
+const formatKnownPlannedParticipants = (
     trip: Pick<TripDetails, 'participantMode' | 'participantFixedCount' | 'participantMinCount' | 'participantMaxCount'>
 ) => {
     if (trip.participantMode === 'FIXED' && trip.participantFixedCount != null) {
@@ -135,7 +171,7 @@ const formatPlannedParticipants = (
     if (trip.participantMode === 'RANGE' && trip.participantMinCount != null && trip.participantMaxCount != null) {
         return `${trip.participantMinCount}-${trip.participantMaxCount}`;
     }
-    return 'Not specified';
+    return null;
 };
 
 const getBudgetItemTotalCents = (item: BudgetItem) =>
@@ -148,7 +184,79 @@ const getBudgetItemPerPersonCents = (item: BudgetItem) =>
         ? item.estimatedCostCents
         : Math.round(item.estimatedCostCents / Math.max(1, item.peopleCount));
 
-export default function TripDetailsClient({ trip, canManage, canViewParticipants, initialTab = 'overview' }: Props) {
+type BudgetWarningInput = {
+    pricingMode: 'PER_PERSON' | 'GROUP_TOTAL';
+    peopleCount: number;
+    dayStart: number | null;
+    dayEnd: number | null;
+    estimatedCostCents: number;
+};
+
+type BudgetWarningLevel = 'high' | 'medium' | 'low';
+
+type BudgetWarningEntry = {
+    level: BudgetWarningLevel;
+    message: string;
+};
+
+type ExploreLocationPoint = {
+    location: string;
+    displayName: string;
+    lat: number;
+    lng: number;
+};
+
+type ExploreMapPoint = {
+    location: string;
+    dayNumber: number;
+    lat: number;
+    lng: number;
+};
+
+const TripExploreMap = dynamic(
+    () => import('@/components/trips/TripExploreMap').then((mod) => mod.TripExploreMap),
+    { ssr: false }
+);
+
+const getBudgetWarningEntries = ({
+    pricingMode,
+    peopleCount,
+    dayStart,
+    dayEnd,
+    estimatedCostCents,
+}: BudgetWarningInput) => {
+    const warnings: BudgetWarningEntry[] = [];
+
+    if (dayStart != null && dayEnd != null && dayEnd < dayStart) {
+        warnings.push({ level: 'high', message: 'Tag-Ende liegt vor Tag-Start.' });
+    }
+
+    if (estimatedCostCents <= 0) {
+        warnings.push({ level: 'high', message: 'Kosten sind 0 oder kleiner.' });
+    }
+
+    if (pricingMode === 'PER_PERSON' && peopleCount <= 1) {
+        warnings.push({ level: 'medium', message: 'Kostenart "Pro Person" mit nur 1 Person wirkt unplausibel.' });
+    }
+
+    if (pricingMode === 'GROUP_TOTAL' && peopleCount <= 1) {
+        warnings.push({ level: 'low', message: 'Kostenart "Für Gruppe" mit nur 1 Person prüfen.' });
+    }
+
+    return warnings;
+};
+
+const getBudgetWarnings = (input: BudgetWarningInput) => getBudgetWarningEntries(input).map((warning) => warning.message);
+
+export default function TripDetailsClient({
+    trip,
+    currentUserId,
+    canManage,
+    canManageParticipants,
+    canManageTripSettings,
+    canViewParticipants,
+    initialTab = 'overview',
+}: Props) {
     const router = useRouter();
     const pathname = usePathname();
 
@@ -159,7 +267,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
         const parts = currentPathname.split('/').filter(Boolean);
         const lastSegment = parts[parts.length - 1];
-        if (lastSegment === 'itinerary' || lastSegment === 'explore' || lastSegment === 'budget') {
+        if (lastSegment === 'itinerary' || lastSegment === 'explore' || lastSegment === 'budget' || lastSegment === 'chat') {
             return lastSegment;
         }
 
@@ -177,6 +285,10 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
     const [blockLength, setBlockLength] = useState(1);
     const [summary, setSummary] = useState('');
     const [location, setLocation] = useState('');
+    const [locationPlaceId, setLocationPlaceId] = useState('');
+    const [locationSuggestions, setLocationSuggestions] = useState<PlaceSuggestion[]>([]);
+    const [isLoadingLocationSuggestions, setIsLoadingLocationSuggestions] = useState(false);
+    const [locationSuggestionError, setLocationSuggestionError] = useState('');
     const [tagsInput, setTagsInput] = useState('');
     const [isSavingDay, setIsSavingDay] = useState(false);
     const [isUpdatingDay, setIsUpdatingDay] = useState(false);
@@ -196,6 +308,11 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
     const [editDayNumber, setEditDayNumber] = useState(1);
     const [editSummary, setEditSummary] = useState('');
     const [editLocation, setEditLocation] = useState('');
+    const [editLocationPlaceId, setEditLocationPlaceId] = useState('');
+    const [editLocationSuggestions, setEditLocationSuggestions] = useState<PlaceSuggestion[]>([]);
+    const [isLoadingEditLocationSuggestions, setIsLoadingEditLocationSuggestions] = useState(false);
+    const [editLocationSuggestionError, setEditLocationSuggestionError] = useState('');
+    const [isEditLocationDirty, setIsEditLocationDirty] = useState(false);
     const [editTagsInput, setEditTagsInput] = useState('');
     const [activityTime, setActivityTime] = useState('');
     const [activityTitle, setActivityTitle] = useState('');
@@ -220,10 +337,39 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
     const [editBudgetDayStart, setEditBudgetDayStart] = useState('');
     const [editBudgetDayEnd, setEditBudgetDayEnd] = useState('');
     const [editBudgetNotes, setEditBudgetNotes] = useState('');
-    const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>({});
+    const [collapsedDays, setCollapsedDays] = useState<Record<string, boolean>>(() => {
+        const initial: Record<string, boolean> = {};
+        trip.itineraryDays.forEach((day) => {
+            initial[day.id] = true;
+        });
+        return initial;
+    });
     const [collapsedBudgetCategories, setCollapsedBudgetCategories] = useState<Record<string, boolean>>({});
+    const [expandedBudgetNotes, setExpandedBudgetNotes] = useState<Record<string, boolean>>({});
+    const [isItineraryEditMode, setIsItineraryEditMode] = useState(false);
+    const [isBudgetEditMode, setIsBudgetEditMode] = useState(false);
     const [itineraryError, setItineraryError] = useState('');
     const [budgetError, setBudgetError] = useState('');
+    const [explorePoints, setExplorePoints] = useState<ExploreLocationPoint[]>([]);
+    const [isLoadingExplorePoints, setIsLoadingExplorePoints] = useState(false);
+    const [exploreError, setExploreError] = useState('');
+    const canEditItinerary = canManage && isItineraryEditMode;
+    const canEditBudget = canManage && isBudgetEditMode;
+    const isAnyModalOpen =
+        showAddBudgetForm ||
+        showAddDayForm ||
+        editingDayId !== null ||
+        activityFormDayId !== null ||
+        editingActivityId !== null;
+
+    const parseOptionalDayNumber = (value: string) => {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            return null;
+        }
+        const parsed = Number(trimmed);
+        return Number.isFinite(parsed) ? parsed : null;
+    };
 
     const navigateToTab = (tab: TripTab) => {
         const targetPath = tab === 'overview'
@@ -238,6 +384,162 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         () => [...itineraryDays].sort((a, b) => a.dayNumber - b.dayNumber),
         [itineraryDays]
     );
+
+    useEffect(() => {
+        setCollapsedDays((prev) => {
+            const next: Record<string, boolean> = {};
+            itineraryDays.forEach((day) => {
+                next[day.id] = prev[day.id] ?? true;
+            });
+            return next;
+        });
+    }, [itineraryDays]);
+
+    useEffect(() => {
+        if (canManage) {
+            return;
+        }
+        setIsItineraryEditMode(false);
+        setIsBudgetEditMode(false);
+    }, [canManage]);
+
+    useEffect(() => {
+        if (isItineraryEditMode) {
+            return;
+        }
+        setShowAddDayForm(false);
+        setEditingDayId(null);
+        setEditingBlockDayIds([]);
+        setEditingBlockLength(1);
+        setEditDayNumber(1);
+        setEditSummary('');
+        setEditLocation('');
+        setEditTagsInput('');
+        setActivityFormDayId(null);
+        setActivityTime('');
+        setActivityTitle('');
+        setActivityType('ACTIVITY');
+        setEditingActivityDayId(null);
+        setEditingActivityId(null);
+        setEditActivityTime('');
+        setEditActivityTitle('');
+        setEditActivityType('ACTIVITY');
+        setLocationSuggestions([]);
+        setLocationPlaceId('');
+        setLocationSuggestionError('');
+        setEditLocationSuggestions([]);
+        setEditLocationPlaceId('');
+        setEditLocationSuggestionError('');
+        setIsEditLocationDirty(false);
+        setItineraryError('');
+    }, [isItineraryEditMode]);
+
+    useEffect(() => {
+        if (locationPlaceId) {
+            setLocationSuggestions([]);
+            setIsLoadingLocationSuggestions(false);
+            return;
+        }
+
+        const query = location.trim();
+        if (query.length < 2 || !showAddDayForm || !canEditItinerary) {
+            setLocationSuggestions([]);
+            setIsLoadingLocationSuggestions(false);
+            return;
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(async () => {
+            try {
+                setIsLoadingLocationSuggestions(true);
+                setLocationSuggestionError('');
+                const response = await fetch(`/api/places/search?q=${encodeURIComponent(query)}`, {
+                    signal: controller.signal,
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    setLocationSuggestionError(data.message || 'Ortsvorschläge konnten nicht geladen werden.');
+                    return;
+                }
+                setLocationSuggestions(Array.isArray(data.places) ? data.places : []);
+            } catch {
+                if (!controller.signal.aborted) {
+                    setLocationSuggestionError('Ortsvorschläge konnten nicht geladen werden.');
+                }
+            } finally {
+                if (!controller.signal.aborted) {
+                    setIsLoadingLocationSuggestions(false);
+                }
+            }
+        }, 250);
+
+        return () => {
+            controller.abort();
+            clearTimeout(timeout);
+        };
+    }, [location, locationPlaceId, showAddDayForm, canEditItinerary]);
+
+    useEffect(() => {
+        if (editLocationPlaceId) {
+            setEditLocationSuggestions([]);
+            setIsLoadingEditLocationSuggestions(false);
+            return;
+        }
+
+        const query = editLocation.trim();
+        if (query.length < 2 || !editingDayId || !canEditItinerary || !isEditLocationDirty) {
+            setEditLocationSuggestions([]);
+            setIsLoadingEditLocationSuggestions(false);
+            return;
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(async () => {
+            try {
+                setIsLoadingEditLocationSuggestions(true);
+                setEditLocationSuggestionError('');
+                const response = await fetch(`/api/places/search?q=${encodeURIComponent(query)}`, {
+                    signal: controller.signal,
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    setEditLocationSuggestionError(data.message || 'Ortsvorschläge konnten nicht geladen werden.');
+                    return;
+                }
+                setEditLocationSuggestions(Array.isArray(data.places) ? data.places : []);
+            } catch {
+                if (!controller.signal.aborted) {
+                    setEditLocationSuggestionError('Ortsvorschläge konnten nicht geladen werden.');
+                }
+            } finally {
+                if (!controller.signal.aborted) {
+                    setIsLoadingEditLocationSuggestions(false);
+                }
+            }
+        }, 250);
+
+        return () => {
+            controller.abort();
+            clearTimeout(timeout);
+        };
+    }, [editLocation, editLocationPlaceId, editingDayId, canEditItinerary, isEditLocationDirty]);
+
+    useEffect(() => {
+        if (isBudgetEditMode) {
+            return;
+        }
+        setShowAddBudgetForm(false);
+        setEditingBudgetId(null);
+        setEditBudgetTitle('');
+        setEditBudgetCategory('TRANSPORT');
+        setEditBudgetPricingMode('GROUP_TOTAL');
+        setEditBudgetPeopleCount(1);
+        setEditBudgetEstimatedCost('');
+        setEditBudgetDayStart('');
+        setEditBudgetDayEnd('');
+        setEditBudgetNotes('');
+        setBudgetError('');
+    }, [isBudgetEditMode]);
 
     const sortActivities = (activities: ItineraryDay['activities']) =>
         [...activities].sort((a, b) => a.time.localeCompare(b.time));
@@ -297,6 +599,131 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         return blocks;
     }, [sortedItinerary]);
 
+    const exploreLocations = useMemo(() => {
+        const seen = new Set<string>();
+        const ordered: string[] = [];
+        sortedItinerary.forEach((day) => {
+            const value = day.location.trim();
+            if (!value) {
+                return;
+            }
+            const key = value.toLowerCase();
+            if (!seen.has(key)) {
+                seen.add(key);
+                ordered.push(value);
+            }
+        });
+        return ordered;
+    }, [sortedItinerary]);
+
+    const exploreOrderedStops = useMemo(() => {
+        const seen = new Set<string>();
+        return sortedItinerary
+            .map((day) => ({
+                dayNumber: day.dayNumber,
+                location: day.location.trim(),
+            }))
+            .filter((entry) => entry.location.length > 0)
+            .filter((entry) => {
+                const key = entry.location.toLowerCase();
+                if (seen.has(key)) {
+                    return false;
+                }
+                seen.add(key);
+                return true;
+            });
+    }, [sortedItinerary]);
+
+    useEffect(() => {
+        if (activeTab !== 'explore') {
+            return;
+        }
+        if (exploreLocations.length === 0) {
+            setExplorePoints([]);
+            setExploreError('');
+            setIsLoadingExplorePoints(false);
+            return;
+        }
+
+        let cancelled = false;
+        const controller = new AbortController();
+
+        const loadExplorePoints = async () => {
+            setIsLoadingExplorePoints(true);
+            setExploreError('');
+
+            try {
+                const responses = await Promise.all(
+                    exploreLocations.map(async (location) => {
+                        const response = await fetch(`/api/places/search?q=${encodeURIComponent(location)}`, {
+                            signal: controller.signal,
+                        });
+                        const data = await response.json();
+                        if (!response.ok) {
+                            throw new Error(data.message || 'Orte konnten nicht geladen werden.');
+                        }
+                        const places = Array.isArray(data.places) ? (data.places as PlaceSuggestion[]) : [];
+                        const first = places[0];
+                        if (!first) {
+                            return null;
+                        }
+                        return {
+                            location,
+                            displayName: first.displayName,
+                            lat: first.lat,
+                            lng: first.lng,
+                        } as ExploreLocationPoint;
+                    })
+                );
+
+                if (cancelled) {
+                    return;
+                }
+
+                setExplorePoints(
+                    responses.filter((entry): entry is ExploreLocationPoint => Boolean(entry))
+                );
+            } catch {
+                if (cancelled || controller.signal.aborted) {
+                    return;
+                }
+                setExploreError('Karte konnte nicht geladen werden.');
+                setExplorePoints([]);
+            } finally {
+                if (!cancelled) {
+                    setIsLoadingExplorePoints(false);
+                }
+            }
+        };
+
+        void loadExplorePoints();
+
+        return () => {
+            cancelled = true;
+            controller.abort();
+        };
+    }, [activeTab, exploreLocations]);
+
+    const exploreMapPoints = useMemo(() => {
+        const pointByLocation = new globalThis.Map(
+            explorePoints.map((point) => [point.location.toLowerCase(), point] as const)
+        );
+        return exploreOrderedStops
+            .map((stop) => {
+                const point = pointByLocation.get(stop.location.toLowerCase());
+                if (!point) {
+                    return null;
+                }
+                return {
+                    location: stop.location,
+                    dayNumber: stop.dayNumber,
+                    lat: point.lat,
+                    lng: point.lng,
+                };
+            })
+            .filter((entry): entry is ExploreMapPoint => Boolean(entry));
+    }, [explorePoints, exploreOrderedStops]);
+
     const totalBudgetCents = useMemo(
         () => budgetItems.reduce((sum, item) => sum + getBudgetItemTotalCents(item), 0),
         [budgetItems]
@@ -324,6 +751,42 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
             }))
             .sort((a, b) => b.totalCents - a.totalCents);
     }, [budgetItems]);
+
+    const budgetCategoryChartData = useMemo(() => {
+        if (budgetItemsByCategory.length === 0 || totalBudgetCents <= 0) {
+            return [];
+        }
+        return budgetItemsByCategory.map((entry, index) => ({
+            ...entry,
+            sharePercent: Math.max(1, Math.round((entry.totalCents / totalBudgetCents) * 100)),
+            color: BUDGET_CHART_COLORS[index % BUDGET_CHART_COLORS.length],
+        }));
+    }, [budgetItemsByCategory, totalBudgetCents]);
+    const budgetPieGradient = useMemo(() => {
+        if (budgetCategoryChartData.length === 0) {
+            return '';
+        }
+        let current = 0;
+        const stops = budgetCategoryChartData.map((entry) => {
+            const start = current;
+            const end = Math.min(100, current + entry.sharePercent);
+            current = end;
+            return `${entry.color} ${start}% ${end}%`;
+        });
+        return `conic-gradient(${stops.join(', ')})`;
+    }, [budgetCategoryChartData]);
+
+    const addBudgetWarnings = useMemo(
+        () =>
+            getBudgetWarnings({
+                pricingMode: budgetPricingMode,
+                peopleCount: budgetPeopleCount,
+                dayStart: parseOptionalDayNumber(budgetDayStart),
+                dayEnd: parseOptionalDayNumber(budgetDayEnd),
+                estimatedCostCents: Math.round((Number(budgetEstimatedCost) || 0) * 100),
+            }),
+        [budgetPricingMode, budgetPeopleCount, budgetDayStart, budgetDayEnd, budgetEstimatedCost]
+    );
 
     const groupedBudgetItems = useMemo(() => {
         const groupMap = new globalThis.Map<string, BudgetItem[]>();
@@ -378,22 +841,38 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         return Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1);
     }, [trip.timeMode, trip.plannedDurationDays, trip.startDate, trip.endDate]);
 
-    const totalActivities = useMemo(
-        () => itineraryDays.reduce((sum, day) => sum + day.activities.length, 0),
-        [itineraryDays]
-    );
+    const itineraryTimelineItems = useMemo(() => {
+        const items: ItineraryTimelineItem[] = [];
+        if (groupedItinerary.length === 0) {
+            return items;
+        }
 
-    const uniqueTagsCount = useMemo(() => {
-        const uniqueTags = new Set<string>();
-        itineraryDays.forEach((day) => {
-            day.tags.forEach((tag) => {
-                if (tag.trim().length > 0) {
-                    uniqueTags.add(tag.trim().toLowerCase());
-                }
+        let cursor = 1;
+        groupedItinerary.forEach((block) => {
+            if (block.start > cursor) {
+                items.push({
+                    kind: 'missing',
+                    start: cursor,
+                    end: block.start - 1,
+                });
+            }
+            items.push({
+                kind: 'planned',
+                block,
             });
+            cursor = block.end + 1;
         });
-        return uniqueTags.size;
-    }, [itineraryDays]);
+
+        if (cursor <= tripDurationDays) {
+            items.push({
+                kind: 'missing',
+                start: cursor,
+                end: tripDurationDays,
+            });
+        }
+
+        return items;
+    }, [groupedItinerary, tripDurationDays]);
 
     const toggleDayActivities = (dayId: string) => {
         setCollapsedDays((prev) => ({
@@ -425,8 +904,22 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         }));
     };
 
+    const toggleBudgetNotes = (itemId: string) => {
+        setExpandedBudgetNotes((prev) => ({
+            ...prev,
+            [itemId]: !prev[itemId],
+        }));
+    };
+
     const handleAddDay = async (e: FormEvent) => {
         e.preventDefault();
+        if (!canEditItinerary) {
+            return;
+        }
+        if (!locationPlaceId) {
+            setItineraryError('Bitte wähle einen realen Ort aus den Vorschlägen aus.');
+            return;
+        }
         setItineraryError('');
         setIsSavingDay(true);
 
@@ -480,6 +973,9 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
             ]);
             setSummary('');
             setLocation('');
+            setLocationPlaceId('');
+            setLocationSuggestions([]);
+            setLocationSuggestionError('');
             setTagsInput('');
             setBlockLength(1);
             setDayNumber((prev) => prev + blockLength);
@@ -491,7 +987,36 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         }
     };
 
+    const planMissingDays = (start: number, end: number) => {
+        if (!canEditItinerary) {
+            return;
+        }
+        setDayNumber(start);
+        setBlockLength(Math.max(1, end - start + 1));
+        setLocation('');
+        setLocationPlaceId('');
+        setLocationSuggestions([]);
+        setLocationSuggestionError('');
+        setSummary('');
+        setTagsInput('');
+        setShowAddDayForm(true);
+    };
+
+    const cancelAddDay = () => {
+        setShowAddDayForm(false);
+        setSummary('');
+        setLocation('');
+        setLocationPlaceId('');
+        setLocationSuggestions([]);
+        setLocationSuggestionError('');
+        setTagsInput('');
+        setBlockLength(1);
+    };
+
     const startEditDay = (dayId: string, block?: ItineraryBlock) => {
+        if (!canEditItinerary) {
+            return;
+        }
         const day = itineraryDays.find((entry) => entry.id === dayId);
         if (!day) {
             return;
@@ -503,6 +1028,10 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         setEditDayNumber(block ? block.start : day.dayNumber);
         setEditSummary(day.summary);
         setEditLocation(day.location);
+        setEditLocationPlaceId('existing');
+        setEditLocationSuggestions([]);
+        setEditLocationSuggestionError('');
+        setIsEditLocationDirty(false);
         setEditTagsInput(day.tags.join(', '));
     };
 
@@ -513,11 +1042,18 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         setEditDayNumber(1);
         setEditSummary('');
         setEditLocation('');
+        setEditLocationPlaceId('');
+        setEditLocationSuggestions([]);
+        setEditLocationSuggestionError('');
+        setIsEditLocationDirty(false);
         setEditTagsInput('');
         setItineraryError('');
     };
 
     const startAddActivity = (dayId: string) => {
+        if (!canEditItinerary) {
+            return;
+        }
         setItineraryError('');
         setActivityFormDayId(dayId);
         setActivityTime('');
@@ -534,6 +1070,9 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
     const handleAddActivity = async (e: FormEvent, dayId: string) => {
         e.preventDefault();
+        if (!canEditItinerary) {
+            return;
+        }
         setItineraryError('');
         setIsSavingActivity(true);
 
@@ -594,6 +1133,9 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         dayId: string,
         activity: TripDetails['itineraryDays'][number]['activities'][number]
     ) => {
+        if (!canEditItinerary) {
+            return;
+        }
         setItineraryError('');
         setEditingActivityDayId(dayId);
         setEditingActivityId(activity.id);
@@ -612,6 +1154,9 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
     const handleUpdateActivity = async (e: FormEvent, dayId: string, activityId: string) => {
         e.preventDefault();
+        if (!canEditItinerary) {
+            return;
+        }
         setItineraryError('');
         setIsUpdatingActivity(true);
 
@@ -673,6 +1218,9 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
     };
 
     const handleDeleteActivity = async (dayId: string, activityId: string) => {
+        if (!canEditItinerary) {
+            return;
+        }
         const confirmed = window.confirm('Delete this activity?');
         if (!confirmed) {
             return;
@@ -715,7 +1263,14 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
     const handleUpdateDay = async (e: FormEvent) => {
         e.preventDefault();
+        if (!canEditItinerary) {
+            return;
+        }
         if (!editingDayId) {
+            return;
+        }
+        if (isEditLocationDirty && !editLocationPlaceId) {
+            setItineraryError('Bitte wähle einen realen Ort aus den Vorschlägen aus.');
             return;
         }
 
@@ -827,6 +1382,9 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
     };
 
     const handleDeleteDay = async (dayId: string, block?: ItineraryBlock) => {
+        if (!canEditItinerary) {
+            return;
+        }
         const blockDayIds = block ? block.days.map((entry) => entry.id) : [dayId];
         const isBlockDelete = blockDayIds.length > 1;
         const confirmed = window.confirm(
@@ -905,6 +1463,9 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
     };
 
     const startEditBudgetItem = (item: BudgetItem) => {
+        if (!canEditBudget) {
+            return;
+        }
         setBudgetError('');
         setEditingBudgetId(item.id);
         setEditBudgetTitle(item.title);
@@ -929,9 +1490,11 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
         setEditBudgetNotes('');
         setBudgetError('');
     };
-
     const handleAddBudgetItem = async (e: FormEvent) => {
         e.preventDefault();
+        if (!canEditBudget) {
+            return;
+        }
         setBudgetError('');
         setIsSavingBudget(true);
 
@@ -955,7 +1518,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
             const data = await response.json();
             if (!response.ok) {
-                setBudgetError(data.message || 'Could not add budget item.');
+                setBudgetError(data.message || 'Budget-Eintrag konnte nicht hinzugefügt werden.');
                 return;
             }
 
@@ -975,7 +1538,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
             ]);
             resetBudgetForm();
         } catch {
-            setBudgetError('Could not add budget item.');
+            setBudgetError('Budget-Eintrag konnte nicht hinzugefügt werden.');
         } finally {
             setIsSavingBudget(false);
         }
@@ -983,6 +1546,9 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
     const handleUpdateBudgetItem = async (e: FormEvent, itemId: string) => {
         e.preventDefault();
+        if (!canEditBudget) {
+            return;
+        }
         setBudgetError('');
         setIsUpdatingBudget(true);
 
@@ -1006,7 +1572,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
             const data = await response.json();
             if (!response.ok) {
-                setBudgetError(data.message || 'Could not update budget item.');
+                setBudgetError(data.message || 'Budget-Eintrag konnte nicht aktualisiert werden.');
                 return;
             }
 
@@ -1029,14 +1595,17 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
             );
             cancelEditBudgetItem();
         } catch {
-            setBudgetError('Could not update budget item.');
+            setBudgetError('Budget-Eintrag konnte nicht aktualisiert werden.');
         } finally {
             setIsUpdatingBudget(false);
         }
     };
 
     const handleDeleteBudgetItem = async (itemId: string) => {
-        const confirmed = window.confirm('Delete this budget item?');
+        if (!canEditBudget) {
+            return;
+        }
+        const confirmed = window.confirm('Diesen Budget-Eintrag löschen?');
         if (!confirmed) {
             return;
         }
@@ -1051,7 +1620,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
 
             const data = await response.json();
             if (!response.ok) {
-                setBudgetError(data.message || 'Could not delete budget item.');
+                setBudgetError(data.message || 'Budget-Eintrag konnte nicht gelöscht werden.');
                 return;
             }
 
@@ -1060,7 +1629,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                 cancelEditBudgetItem();
             }
         } catch {
-            setBudgetError('Could not delete budget item.');
+            setBudgetError('Budget-Eintrag konnte nicht gelöscht werden.');
         } finally {
             setIsDeletingBudgetId(null);
         }
@@ -1093,7 +1662,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                 <span className="hidden sm:inline">Participants</span>
                             </Link>
                         )}
-                        {canManage && (
+                        {canManageTripSettings && (
                             <Link
                                 href={`/trip/${trip.id}/settings`}
                                 className="flex items-center justify-center h-10 w-10 rounded-full bg-black/30 text-white hover:bg-black/50 backdrop-blur-md transition-colors"
@@ -1109,10 +1678,19 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                     <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
                         <div>
                             <h1 className="text-2xl sm:text-3xl font-bold text-white mb-1">{trip.title}</h1>
-                            <div className="mb-2">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
                                 <span className="inline-flex items-center rounded-full border border-white/30 bg-white/10 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm">
                                     {trip.category}
                                 </span>
+                                <span className="inline-flex items-center rounded-full border border-white/30 bg-white/10 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm">
+                                    {trip.timeMode === 'FLEXIBLE' ? 'Flexible' : 'Fixed'}
+                                </span>
+                                {formatKnownPlannedParticipants(trip) && (
+                                    <span className="inline-flex items-center gap-1 rounded-full border border-white/30 bg-white/10 px-2.5 py-1 text-xs font-medium text-white backdrop-blur-sm">
+                                        <UserRoundPlus className="h-3.5 w-3.5" />
+                                        {formatKnownPlannedParticipants(trip)}
+                                    </span>
+                                )}
                             </div>
                             <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-white/90 text-xs sm:text-sm">
                                 <span className="flex items-center gap-1.5 font-medium">
@@ -1126,21 +1704,26 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                             </div>
                         </div>
 
-                        <div className="flex items-center -space-x-2">
+                        <div
+                            className={`flex items-center -space-x-2 transition-all ${
+                                isAnyModalOpen ? 'pointer-events-none opacity-0 blur-sm' : 'opacity-100'
+                            }`}
+                        >
                             {trip.collaborators.map((user) => (
-                                <div
+                                <UserAvatar
                                     key={user.id}
-                                    className={`h-8 w-8 rounded-full border-2 border-slate-900 ${user.color} flex items-center justify-center text-white text-xs font-bold shadow-sm`}
-                                    title={user.name}
-                                >
-                                    {user.initial}
-                                </div>
+                                    name={user.name}
+                                    image={user.image}
+                                    sizeClassName="h-8 w-8"
+                                    textClassName="text-xs"
+                                    className="border border-slate-900/80 shadow-sm align-middle"
+                                />
                             ))}
                             {canViewParticipants ? (
                                 <Link
                                     href={`/trip/${trip.id}/settings/participants`}
                                     className="h-8 w-8 rounded-full border-2 border-slate-900 bg-white/20 backdrop-blur-md flex items-center justify-center text-white text-xs font-bold hover:bg-white/30 transition-colors cursor-pointer shadow-sm"
-                                    title="Manage participants"
+                                    title={canManageParticipants ? 'Manage participants' : 'View participants'}
                                 >
                                     <Plus className="h-3 w-3" />
                                 </Link>
@@ -1162,29 +1745,42 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                 onClick={() => navigateToTab('overview')}
                                 className={`flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl font-medium text-sm transition-colors ${activeTab === 'overview' ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
                             >
-                                <LayoutDashboard className="h-4 w-4" />
-                                Overview
+                                <FileText className="h-4 w-4" />
+                                Übersicht
                             </button>
+                            <div className="flex-shrink-0 px-4 pt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                                Reise
+                            </div>
                             <button
                                 onClick={() => navigateToTab('itinerary')}
                                 className={`flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl font-medium text-sm transition-colors ${activeTab === 'itinerary' ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
                             >
                                 <Map className="h-4 w-4" />
-                                Itinerary
+                                Planung
                             </button>
                             <button
                                 onClick={() => navigateToTab('explore')}
                                 className={`flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl font-medium text-sm transition-colors ${activeTab === 'explore' ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
                             >
                                 <MapPin className="h-4 w-4" />
-                                Explore Places
+                                Reise Route
                             </button>
+                            <div className="flex-shrink-0 px-4 pt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                                Finanzen
+                            </div>
                             <button
                                 onClick={() => navigateToTab('budget')}
                                 className={`flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl font-medium text-sm transition-colors ${activeTab === 'budget' ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
                             >
-                                <Coffee className="h-4 w-4" />
+                                <Calculator className="h-4 w-4" />
                                 Budget
+                            </button>
+                            <button
+                                onClick={() => navigateToTab('chat')}
+                                className={`flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl font-medium text-sm transition-colors ${activeTab === 'chat' ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
+                            >
+                                <MessageCircle className="h-4 w-4" />
+                                Chat
                             </button>
                         </nav>
                     </div>
@@ -1193,42 +1789,19 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                         {activeTab === 'overview' && (
                             <div className="space-y-6">
                                 <div>
-                                    <h2 className="text-xl font-bold text-slate-800">Trip Overview</h2>
+                                    <h2 className="text-xl font-bold text-slate-800">Reiseübersicht</h2>
                                     <p className="mt-1 text-sm text-slate-500">
-                                        Description, itinerary progress, and budget snapshot in one place.
+                                        Beschreibung, Planungsstand und Budget-Snapshot auf einen Blick.
                                     </p>
                                 </div>
 
                                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                                    <p className="text-xs uppercase tracking-wide text-slate-500">Description</p>
-                                    <p className="mt-2 text-sm text-slate-700">
+                                    <p className="text-xs uppercase tracking-wide text-slate-500">Beschreibung</p>
+                                    <p className="mt-2 whitespace-pre-line text-sm text-slate-700">
                                         {trip.description?.trim()
                                             ? trip.description
-                                            : 'No description yet. The owner can add one in trip settings.'}
+                                            : 'Noch keine Beschreibung vorhanden. Der Besitzer kann sie in den Reiseeinstellungen ergänzen.'}
                                     </p>
-                                </div>
-
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Category</p>
-                                        <p className="mt-1 text-xl font-bold text-slate-800">{trip.category}</p>
-                                    </div>
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Duration</p>
-                                        <p className="mt-1 text-xl font-bold text-slate-800">{tripDurationDays} days</p>
-                                    </div>
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Itinerary days</p>
-                                        <p className="mt-1 text-xl font-bold text-slate-800">{itineraryDays.length}</p>
-                                    </div>
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Planned activities</p>
-                                        <p className="mt-1 text-xl font-bold text-slate-800">{totalActivities}</p>
-                                    </div>
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Planned participants</p>
-                                        <p className="mt-1 text-xl font-bold text-slate-800">{formatPlannedParticipants(trip)}</p>
-                                    </div>
                                 </div>
 
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1236,31 +1809,55 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                         type="button"
                                         onClick={() => navigateToTab('itinerary')}
                                         className="rounded-2xl border border-slate-200 bg-white p-5 text-left transition-colors hover:bg-slate-50"
-                                        aria-label="Open itinerary details"
+                                        aria-label="Planungsdetails öffnen"
                                     >
-                                        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Itinerary Snapshot</h3>
+                                        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Planungs-Snapshot</h3>
+                                        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                            <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700">
+                                                {itineraryDays.length} von {tripDurationDays} Tagen geplant
+                                            </span>
+                                        </div>
                                         {groupedItinerary.length === 0 ? (
-                                            <p className="mt-3 text-sm text-slate-500">No travel days added yet.</p>
+                                            <p className="mt-3 text-sm text-slate-500">Es wurden noch keine Reisetage hinzugefügt.</p>
                                         ) : (
-                                            <div className="mt-4 space-y-3">
-                                                {groupedItinerary.slice(0, 3).map((block) => {
+                                            <div className="mt-4">
+                                                {groupedItinerary.slice(0, 6).map((block, index) => {
                                                     const representativeDay = block.days[0];
                                                     const blockLabel =
                                                         block.days.length > 1
-                                                            ? `Days ${block.start}-${block.end}`
-                                                            : `Day ${block.start}`;
+                                                            ? `Tage ${block.start}-${block.end}`
+                                                            : `Tag ${block.start}`;
+                                                    const isLastVisible = index === Math.min(groupedItinerary.length, 6) - 1;
 
                                                     return (
-                                                    <div key={block.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                                        <p className="text-sm font-semibold text-slate-800">{blockLabel}</p>
-                                                        <p className="mt-0.5 text-sm text-slate-600">{representativeDay.location}</p>
-                                                        <p className="mt-1 text-xs text-slate-500 line-clamp-2">{representativeDay.summary}</p>
+                                                    <div key={block.id} className="relative pl-8 pb-4">
+                                                        {!isLastVisible && (
+                                                            <span
+                                                                className="absolute top-4 -bottom-4 w-px bg-slate-200"
+                                                                style={{ left: '13px' }}
+                                                            />
+                                                        )}
+                                                        <span className="absolute left-[7px] top-2.5 h-3 w-3 rounded-full border-2 border-blue-200 bg-blue-500" />
+                                                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                                                            <div className="grid grid-cols-[208px_minmax(0,1fr)] items-center gap-2">
+                                                                <p className="truncate text-sm font-semibold text-slate-800">{blockLabel}</p>
+                                                                <span className="inline-flex min-w-0 items-center gap-1 text-xs text-slate-600">
+                                                                    <MapPin className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                                                                    <span className="min-w-0 truncate">{representativeDay.location}</span>
+                                                                </span>
+                                                            </div>
+                                                            {representativeDay.summary?.trim().length > 0 && (
+                                                                <p className="mt-1 text-xs text-slate-500 line-clamp-1">
+                                                                    {representativeDay.summary}
+                                                                </p>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                     );
                                                 })}
-                                                {groupedItinerary.length > 3 && (
-                                                    <p className="text-xs text-slate-500">
-                                                        +{groupedItinerary.length - 3} more block(s). Open Itinerary for full details.
+                                                {groupedItinerary.length > 6 && (
+                                                    <p className="pl-8 text-xs text-slate-500">
+                                                        +{groupedItinerary.length - 6} weitere Blöcke. Öffne Planung für alle Details.
                                                     </p>
                                                 )}
                                             </div>
@@ -1271,39 +1868,52 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                         type="button"
                                         onClick={() => navigateToTab('budget')}
                                         className="rounded-2xl border border-slate-200 bg-white p-5 text-left transition-colors hover:bg-slate-50"
-                                        aria-label="Open budget details"
+                                        aria-label="Budget-Details öffnen"
                                     >
-                                        <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Budget Snapshot</h3>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600">Budget-Snapshot</h3>
+                                        </div>
                                         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
                                             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                                <p className="text-xs uppercase tracking-wide text-slate-500">Total estimate</p>
+                                                <p className="text-xs uppercase tracking-wide text-slate-500">Gesamtschätzung</p>
                                                 <p className="mt-1 text-base font-semibold text-slate-800">{formatCurrency(totalBudgetCents)}</p>
                                             </div>
                                             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                                <p className="text-xs uppercase tracking-wide text-slate-500">Per person</p>
+                                                <p className="text-xs uppercase tracking-wide text-slate-500">Pro Person</p>
                                                 <p className="mt-1 text-base font-semibold text-slate-800">{formatCurrency(totalBudgetPerPersonCents)}</p>
                                             </div>
-                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                                <p className="text-xs uppercase tracking-wide text-slate-500">Budget items</p>
-                                                <p className="mt-1 text-base font-semibold text-slate-800">{budgetItems.length}</p>
-                                            </div>
-                                            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                                                <p className="text-xs uppercase tracking-wide text-slate-500">Used tags</p>
-                                                <p className="mt-1 text-base font-semibold text-slate-800">{uniqueTagsCount}</p>
-                                            </div>
                                         </div>
-                                        {budgetItemsByCategory.length > 0 && (
+                                        {budgetCategoryChartData.length > 0 && (
                                             <div className="mt-4">
-                                                <p className="text-xs uppercase tracking-wide text-slate-500">Top budget categories</p>
-                                                <div className="mt-2 flex flex-wrap gap-2">
-                                                    {budgetItemsByCategory.slice(0, 3).map((entry) => (
-                                                        <span
-                                                            key={entry.category}
-                                                            className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700"
+                                                <p className="text-xs uppercase tracking-wide text-slate-500">Kostenverteilung nach Kategorie</p>
+                                                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[132px_minmax(0,1fr)] sm:items-start">
+                                                    <div className="flex justify-center sm:justify-start">
+                                                        <div
+                                                            className="relative h-28 w-28 rounded-full border border-slate-200"
+                                                            style={{ background: budgetPieGradient }}
                                                         >
-                                                            {formatBudgetCategory(entry.category)}: {formatCurrency(entry.totalCents)}
-                                                        </span>
-                                                    ))}
+                                                            <div className="absolute inset-4 rounded-full bg-white" />
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-2">
+                                                        {budgetCategoryChartData.slice(0, 5).map((entry) => (
+                                                            <div key={entry.category} className="flex items-center justify-between gap-2 text-xs">
+                                                                <span className="inline-flex min-w-0 items-center gap-2">
+                                                                    <span
+                                                                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                                                                        style={{ backgroundColor: entry.color }}
+                                                                    />
+                                                                    <span className="truncate font-medium text-slate-700">
+                                                                        {formatBudgetCategory(entry.category)}
+                                                                    </span>
+                                                                </span>
+                                                                <span className="shrink-0 text-slate-600">
+                                                                    {entry.sharePercent}% • {formatCurrency(entry.totalCents)}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
                                                 </div>
                                             </div>
                                         )}
@@ -1313,9 +1923,18 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                         )}
 
                         {activeTab === 'itinerary' && (
-                            <div className="space-y-8">
+                            <div
+                                className={`space-y-8 rounded-2xl p-3 sm:p-4 transition-colors ${
+                                    isItineraryEditMode ? 'bg-blue-50/60 ring-1 ring-blue-100' : 'bg-transparent'
+                                }`}
+                            >
                                 <div className="flex items-center justify-between mb-6">
-                                    <h2 className="text-xl font-bold text-slate-800">Trip Itinerary</h2>
+                                    <div className="space-y-1">
+                                        <h2 className="text-xl font-bold text-slate-800">Reiseplanung</h2>
+                                        <p className="text-sm text-slate-500">
+                                            Geplante Tage: {itineraryDays.length}/{tripDurationDays}
+                                        </p>
+                                    </div>
                                     <div className="flex items-center gap-2">
                                         {sortedItinerary.length > 0 && (
                                             <button
@@ -1323,289 +1942,449 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                 onClick={toggleAllDays}
                                                 className="inline-flex items-center rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                             >
-                                                {areAllDaysCollapsed ? 'Expand all days' : 'Collapse all days'}
+                                                {areAllDaysCollapsed ? 'Alle Tage ausklappen' : 'Alle Tage einklappen'}
                                             </button>
                                         )}
-                                        {canManage && (
+                                        {canEditItinerary && (
                                             <button
                                                 onClick={() => setShowAddDayForm((prev) => !prev)}
                                                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-medium transition-colors shadow-sm"
                                             >
                                                 <Plus className="h-4 w-4" />
-                                                <span className="hidden sm:inline">{showAddDayForm ? 'Cancel' : 'Add Day'}</span>
+                                                <span className="hidden sm:inline">{showAddDayForm ? 'Abbrechen' : 'Tag hinzufügen'}</span>
+                                            </button>
+                                        )}
+                                        {canManage && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsItineraryEditMode((prev) => !prev)}
+                                                className={`inline-flex min-w-[200px] items-center justify-center rounded-xl border px-3 py-2 text-sm font-medium transition-colors ${
+                                                    isItineraryEditMode
+                                                        ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
+                                                        : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                                                }`}
+                                            >
+                                                {isItineraryEditMode ? 'Bearbeitungsmodus aktiv' : 'Bearbeitungsmodus'}
                                             </button>
                                         )}
                                     </div>
                                 </div>
-
                                 {itineraryError && (
                                     <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                                         {itineraryError}
                                     </div>
                                 )}
 
-                                {showAddDayForm && canManage && (
-                                    <form onSubmit={handleAddDay} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 space-y-4">
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                            <div>
-                                                <label htmlFor="day-number" className="block text-sm font-medium text-slate-700">
-                                                    Start day
-                                                </label>
-                                                <input
-                                                    id="day-number"
-                                                    type="number"
-                                                    min={1}
-                                                    required
-                                                    value={dayNumber}
-                                                    onChange={(e) => setDayNumber(Number(e.target.value))}
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label htmlFor="block-length" className="block text-sm font-medium text-slate-700">
-                                                    Number of days (block)
-                                                </label>
-                                                <input
-                                                    id="block-length"
-                                                    type="number"
-                                                    min={1}
-                                                    max={30}
-                                                    required
-                                                    value={blockLength}
-                                                    onChange={(e) => setBlockLength(Number(e.target.value))}
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                        </div>
-
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                            <div>
-                                                <label htmlFor="day-location" className="block text-sm font-medium text-slate-700">
-                                                    Where do you spend the day?
-                                                </label>
-                                                <input
-                                                    id="day-location"
-                                                    type="text"
-                                                    required
-                                                    value={location}
-                                                    onChange={(e) => setLocation(e.target.value)}
-                                                    placeholder="e.g. Kyoto city center"
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                        </div>
-
-                                        <div>
-                                            <label htmlFor="day-summary" className="block text-sm font-medium text-slate-700">
-                                                What is planned that day?
-                                            </label>
-                                            <textarea
-                                                id="day-summary"
-                                                rows={3}
-                                                required
-                                                value={summary}
-                                                onChange={(e) => setSummary(e.target.value)}
-                                                placeholder="Write 1-2 short sentences..."
-                                                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                            />
-                                        </div>
-
-                                        <div>
-                                            <label htmlFor="day-tags" className="block text-sm font-medium text-slate-700">
-                                                Tags
-                                            </label>
-                                            <input
-                                                id="day-tags"
-                                                type="text"
-                                                value={tagsInput}
-                                                onChange={(e) => setTagsInput(e.target.value)}
-                                                placeholder="e.g. culture, food, walking"
-                                                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                            />
-                                            <p className="mt-1 text-xs text-slate-500">Separate tags with commas.</p>
-                                        </div>
-
-                                        <button
-                                            type="submit"
-                                            disabled={isSavingDay}
-                                            className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                {showAddDayForm && canEditItinerary && (
+                                    <div
+                                        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md"
+                                        onClick={cancelAddDay}
+                                    >
+                                        <form
+                                            id="add-day-form"
+                                            onSubmit={handleAddDay}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="w-full max-w-3xl max-h-[88vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 space-y-4 shadow-xl"
                                         >
-                                            {isSavingDay ? 'Saving...' : 'Save Day'}
-                                        </button>
-                                    </form>
+                                            <h3 className="text-lg font-semibold text-slate-800">Tag hinzufügen</h3>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label htmlFor="day-number" className="block text-sm font-medium text-slate-700">
+                                                        Starttag
+                                                    </label>
+                                                    <input
+                                                        id="day-number"
+                                                        type="number"
+                                                        min={1}
+                                                        required
+                                                        value={dayNumber}
+                                                        onChange={(e) => setDayNumber(Number(e.target.value))}
+                                                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label htmlFor="block-length" className="block text-sm font-medium text-slate-700">
+                                                        Anzahl der Tage (Block)
+                                                    </label>
+                                                    <input
+                                                        id="block-length"
+                                                        type="number"
+                                                        min={1}
+                                                        max={30}
+                                                        required
+                                                        value={blockLength}
+                                                        onChange={(e) => setBlockLength(Number(e.target.value))}
+                                                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                <div>
+                                                    <label htmlFor="day-location" className="block text-sm font-medium text-slate-700">
+                                                        Wo verbringst du den Tag?
+                                                    </label>
+                                                    <input
+                                                        id="day-location"
+                                                        type="text"
+                                                        required
+                                                        value={location}
+                                                        onChange={(e) => {
+                                                            setLocation(e.target.value);
+                                                            setLocationPlaceId('');
+                                                        }}
+                                                        placeholder="z. B. Kyoto Innenstadt"
+                                                        className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                    />
+                                                    {isLoadingLocationSuggestions && (
+                                                        <p className="mt-1 text-xs text-slate-500">Suche Orte...</p>
+                                                    )}
+                                                    {locationSuggestionError && (
+                                                        <p className="mt-1 text-xs text-red-600">{locationSuggestionError}</p>
+                                                    )}
+                                                    {locationSuggestions.length > 0 && (
+                                                        <div className="mt-1 max-h-52 overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                                                            {locationSuggestions.map((place) => (
+                                                                <button
+                                                                    key={place.placeId}
+                                                                    type="button"
+                                                                    onClick={() => {
+                                                                        setLocation(place.name);
+                                                                        setLocationPlaceId(place.placeId);
+                                                                        setLocationSuggestions([]);
+                                                                    }}
+                                                                    className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 last:border-b-0"
+                                                                >
+                                                                    <span className="font-medium text-slate-900">{place.name}</span>
+                                                                    <span className="mt-0.5 block text-xs text-slate-500">{place.displayName}</span>
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {!locationPlaceId && location.trim().length > 0 && !isLoadingLocationSuggestions && (
+                                                        <p className="mt-1 text-xs text-amber-600">Bitte einen Vorschlag auswählen.</p>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <label htmlFor="day-summary" className="block text-sm font-medium text-slate-700">
+                                                    Was ist an diesem Tag geplant? (optional)
+                                                </label>
+                                                <textarea
+                                                    id="day-summary"
+                                                    rows={3}
+                                                    value={summary}
+                                                    onChange={(e) => setSummary(e.target.value)}
+                                                    placeholder="Schreibe 1-2 kurze Sätze..."
+                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                />
+                                            </div>
+
+                                            <div>
+                                                <label htmlFor="day-tags" className="block text-sm font-medium text-slate-700">
+                                                    Tags
+                                                </label>
+                                                <input
+                                                    id="day-tags"
+                                                    type="text"
+                                                    value={tagsInput}
+                                                    onChange={(e) => setTagsInput(e.target.value)}
+                                                    placeholder="z. B. Kultur, Essen, Spaziergang"
+                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                />
+                                                <p className="mt-1 text-xs text-slate-500">Tags mit Komma trennen.</p>
+                                            </div>
+
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    type="submit"
+                                                    disabled={isSavingDay}
+                                                    className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                                >
+                                                    {isSavingDay ? 'Speichern...' : 'Tag speichern'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={cancelAddDay}
+                                                    disabled={isSavingDay}
+                                                    className="inline-flex items-center rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                                >
+                                                    Abbrechen
+                                                </button>
+                                            </div>
+                                        </form>
+                                    </div>
                                 )}
 
                                 {sortedItinerary.length === 0 ? (
                                     <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                                        <h3 className="text-lg font-semibold text-slate-800">No itinerary yet</h3>
+                                        <h3 className="text-lg font-semibold text-slate-800">Noch keine Reiseplanung</h3>
                                         <p className="mt-2 text-sm text-slate-500">
-                                            {canManage
-                                                ? 'Start planning by adding the first travel day.'
-                                                : 'The owner has not added travel days yet.'}
+                                            {canEditItinerary
+                                                ? 'Starte die Planung, indem du den ersten Reisetag hinzufügst.'
+                                                : 'Der Besitzer hat noch keine Reisetage hinzugefügt.'}
                                         </p>
                                     </div>
                                 ) : (
-                                    <div className="relative pl-7">
-                                        <div className="absolute left-2.5 top-1 bottom-1 w-px bg-slate-200" aria-hidden="true" />
+                                    <div className="relative pl-8">
+                                        <div
+                                            className="absolute top-1 bottom-1 w-px bg-slate-200"
+                                            style={{ left: '17px' }}
+                                            aria-hidden="true"
+                                        />
                                         <div className="space-y-5">
-                                            {groupedItinerary.map((block) => {
+                                            {itineraryTimelineItems.map((item) => {
+                                                if (item.kind === 'missing') {
+                                                    const missingLabel =
+                                                        item.start === item.end
+                                                            ? `Tag ${item.start}`
+                                                            : `Tage ${item.start}-${item.end}`;
+                                                    return (
+                                                        <div key={`missing-${item.start}-${item.end}`} className="relative">
+                                                            <div
+                                                                className="absolute top-5 h-3 w-3 rounded-full bg-amber-400 ring-4 ring-white"
+                                                                style={{ left: '-21px' }}
+                                                                aria-hidden="true"
+                                                            />
+                                                            <div className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/70 p-5">
+                                                                <h3 className="text-lg font-bold text-amber-800">{missingLabel}</h3>
+                                                                <p className="mt-1 text-sm text-amber-700">
+                                                                    Noch nicht geplant.
+                                                                </p>
+                                                                {canEditItinerary && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => planMissingDays(item.start, item.end)}
+                                                                        className="mt-3 inline-flex items-center rounded-lg border border-amber-400 bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-200 transition-colors"
+                                                                    >
+                                                                        Tage ergänzen
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                const block = item.block;
                                                 const day = block.days[0];
                                                 const blockTitle =
                                                     block.days.length > 1
-                                                        ? `Days ${block.start}-${block.end}`
-                                                        : `Day ${day.dayNumber}`;
+                                                        ? `Tage ${block.start}-${block.end}`
+                                                        : `Tag ${day.dayNumber}`;
 
                                                 return (
                                                     <div key={block.id} className="relative">
-                                                        <div className="absolute -left-[1.55rem] top-5 h-3 w-3 rounded-full bg-blue-500 ring-4 ring-white" aria-hidden="true" />
+                                                        <div
+                                                            className="absolute top-5 h-3 w-3 rounded-full bg-blue-500 ring-4 ring-white"
+                                                            style={{ left: '-21px' }}
+                                                            aria-hidden="true"
+                                                        />
                                                         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                                                            {editingDayId === day.id && canManage ? (
-                                                                <form onSubmit={handleUpdateDay} className="space-y-4">
-                                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                            {editingDayId === day.id && canEditItinerary ? (
+                                                                <div
+                                                                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md"
+                                                                    onClick={cancelEditDay}
+                                                                >
+                                                                    <form
+                                                                        onSubmit={handleUpdateDay}
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        className="w-full max-w-3xl max-h-[88vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 space-y-4 shadow-xl"
+                                                                    >
+                                                                        <h3 className="text-lg font-semibold text-slate-800">Tag bearbeiten</h3>
+                                                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                                            <div>
+                                                                                <label htmlFor={`edit-day-number-${day.id}`} className="block text-sm font-medium text-slate-700">
+                                                                                    {editingBlockLength > 1 ? 'Starttag' : 'Reisetag'}
+                                                                                </label>
+                                                                                <input
+                                                                                    id={`edit-day-number-${day.id}`}
+                                                                                    type="number"
+                                                                                    min={1}
+                                                                                    required
+                                                                                    value={editDayNumber}
+                                                                                    onChange={(e) => setEditDayNumber(Number(e.target.value))}
+                                                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                                                />
+                                                                            </div>
+                                                                            <div>
+                                                                                <label htmlFor={`edit-block-length-${day.id}`} className="block text-sm font-medium text-slate-700">
+                                                                                    Anzahl der Tage (Block)
+                                                                                </label>
+                                                                                <input
+                                                                                    id={`edit-block-length-${day.id}`}
+                                                                                    type="number"
+                                                                                    min={1}
+                                                                                    max={30}
+                                                                                    required
+                                                                                    value={editingBlockLength}
+                                                                                    onChange={(e) => setEditingBlockLength(Number(e.target.value))}
+                                                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                                                />
+                                                                            </div>
+                                                                            <div>
+                                                                                <label htmlFor={`edit-day-location-${day.id}`} className="block text-sm font-medium text-slate-700">
+                                                                                    Wo verbringst du den Tag?
+                                                                                </label>
+                                                                                <input
+                                                                                    id={`edit-day-location-${day.id}`}
+                                                                                    type="text"
+                                                                                    required
+                                                                                    value={editLocation}
+                                                                                    onChange={(e) => {
+                                                                                        setEditLocation(e.target.value);
+                                                                                        setEditLocationPlaceId('');
+                                                                                        setIsEditLocationDirty(true);
+                                                                                    }}
+                                                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                                                />
+                                                                                {isLoadingEditLocationSuggestions && (
+                                                                                    <p className="mt-1 text-xs text-slate-500">Suche Orte...</p>
+                                                                                )}
+                                                                                {editLocationSuggestionError && (
+                                                                                    <p className="mt-1 text-xs text-red-600">{editLocationSuggestionError}</p>
+                                                                                )}
+                                                                                {editLocationSuggestions.length > 0 && (
+                                                                                    <div className="mt-1 max-h-52 overflow-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                                                                                        {editLocationSuggestions.map((place) => (
+                                                                                            <button
+                                                                                                key={place.placeId}
+                                                                                                type="button"
+                                                                                                onClick={() => {
+                                                                                                    setEditLocation(place.name);
+                                                                                                    setEditLocationPlaceId(place.placeId);
+                                                                                                    setEditLocationSuggestions([]);
+                                                                                                }}
+                                                                                                className="block w-full border-b border-slate-100 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50 last:border-b-0"
+                                                                                            >
+                                                                                                <span className="font-medium text-slate-900">{place.name}</span>
+                                                                                                <span className="mt-0.5 block text-xs text-slate-500">{place.displayName}</span>
+                                                                                            </button>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                )}
+                                                                                {isEditLocationDirty && !editLocationPlaceId && editLocation.trim().length > 0 && !isLoadingEditLocationSuggestions && (
+                                                                                    <p className="mt-1 text-xs text-amber-600">Bitte einen Vorschlag auswählen.</p>
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
                                                                         <div>
-                                                                            <label htmlFor={`edit-day-number-${day.id}`} className="block text-sm font-medium text-slate-700">
-                                                                                {editingBlockLength > 1 ? 'Start day' : 'Travel day'}
+                                                                            <label htmlFor={`edit-day-summary-${day.id}`} className="block text-sm font-medium text-slate-700">
+                                                                                Was ist an diesem Tag geplant? (optional)
                                                                             </label>
-                                                                            <input
-                                                                                id={`edit-day-number-${day.id}`}
-                                                                                type="number"
-                                                                                min={1}
-                                                                                required
-                                                                                value={editDayNumber}
-                                                                                onChange={(e) => setEditDayNumber(Number(e.target.value))}
+                                                                            <textarea
+                                                                                id={`edit-day-summary-${day.id}`}
+                                                                                rows={3}
+                                                                                value={editSummary}
+                                                                                onChange={(e) => setEditSummary(e.target.value)}
                                                                                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                                                                             />
                                                                         </div>
                                                                         <div>
-                                                                            <label htmlFor={`edit-block-length-${day.id}`} className="block text-sm font-medium text-slate-700">
-                                                                                Number of days (block)
+                                                                            <label htmlFor={`edit-day-tags-${day.id}`} className="block text-sm font-medium text-slate-700">
+                                                                                Tags
                                                                             </label>
                                                                             <input
-                                                                                id={`edit-block-length-${day.id}`}
-                                                                                type="number"
-                                                                                min={1}
-                                                                                max={30}
-                                                                                required
-                                                                                value={editingBlockLength}
-                                                                                onChange={(e) => setEditingBlockLength(Number(e.target.value))}
-                                                                                className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                                            />
-                                                                        </div>
-                                                                        <div>
-                                                                            <label htmlFor={`edit-day-location-${day.id}`} className="block text-sm font-medium text-slate-700">
-                                                                                Where do you spend the day?
-                                                                            </label>
-                                                                            <input
-                                                                                id={`edit-day-location-${day.id}`}
+                                                                                id={`edit-day-tags-${day.id}`}
                                                                                 type="text"
-                                                                                required
-                                                                                value={editLocation}
-                                                                                onChange={(e) => setEditLocation(e.target.value)}
+                                                                                value={editTagsInput}
+                                                                                onChange={(e) => setEditTagsInput(e.target.value)}
                                                                                 className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                                                                             />
+                                                                            <p className="mt-1 text-xs text-slate-500">Tags mit Komma trennen.</p>
                                                                         </div>
-                                                                    </div>
-                                                                    <div>
-                                                                        <label htmlFor={`edit-day-summary-${day.id}`} className="block text-sm font-medium text-slate-700">
-                                                                            What is planned that day?
-                                                                        </label>
-                                                                        <textarea
-                                                                            id={`edit-day-summary-${day.id}`}
-                                                                            rows={3}
-                                                                            required
-                                                                            value={editSummary}
-                                                                            onChange={(e) => setEditSummary(e.target.value)}
-                                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                                        />
-                                                                    </div>
-                                                                    <div>
-                                                                        <label htmlFor={`edit-day-tags-${day.id}`} className="block text-sm font-medium text-slate-700">
-                                                                            Tags
-                                                                        </label>
-                                                                        <input
-                                                                            id={`edit-day-tags-${day.id}`}
-                                                                            type="text"
-                                                                            value={editTagsInput}
-                                                                            onChange={(e) => setEditTagsInput(e.target.value)}
-                                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                                        />
-                                                                        <p className="mt-1 text-xs text-slate-500">Separate tags with commas.</p>
-                                                                    </div>
-                                                                    <div className="flex items-center gap-2">
-                                                                        <button
-                                                                            type="submit"
-                                                                            disabled={isUpdatingDay}
-                                                                            className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
-                                                                        >
-                                                                            {isUpdatingDay ? 'Saving...' : 'Save changes'}
-                                                                        </button>
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={cancelEditDay}
-                                                                            className="inline-flex items-center rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                                                                        >
-                                                                            Cancel
-                                                                        </button>
-                                                                    </div>
-                                                                </form>
+                                                                        <div className="flex items-center gap-2">
+                                                                            <button
+                                                                                type="submit"
+                                                                                disabled={isUpdatingDay}
+                                                                                className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                                                            >
+                                                                                {isUpdatingDay ? 'Speichern...' : 'Änderungen speichern'}
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={cancelEditDay}
+                                                                                className="inline-flex items-center rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                                                                            >
+                                                                                Abbrechen
+                                                                            </button>
+                                                                        </div>
+                                                                    </form>
+                                                                </div>
                                                             ) : (
                                                                 <>
                                                                     <div className="flex items-start justify-between gap-3">
-                                                                        <div>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => toggleDayActivities(day.id)}
+                                                                            className="min-w-0 flex-1 text-left"
+                                                                            aria-label={collapsedDays[day.id] ? 'Aktivitäten anzeigen' : 'Aktivitäten verbergen'}
+                                                                        >
                                                                             <h3 className="text-lg font-bold text-slate-800">{blockTitle}</h3>
                                                                             <p className="mt-1 text-sm text-slate-600 flex items-center gap-1.5">
                                                                                 <MapPin className="h-4 w-4 text-blue-500" />
                                                                                 {day.location}
                                                                             </p>
-                                                                        </div>
+                                                                        </button>
                                                                         <div className="flex items-center gap-2">
                                                                             <button
                                                                                 type="button"
                                                                                 onClick={() => toggleDayActivities(day.id)}
-                                                                                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                                                                                aria-label={collapsedDays[day.id] ? 'Aktivitäten anzeigen' : 'Aktivitäten verbergen'}
+                                                                                className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200 transition-colors"
                                                                             >
                                                                                 {collapsedDays[day.id] ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                                                                                {collapsedDays[day.id] ? 'Show activities' : 'Hide activities'}
+                                                                                Aktivitäten
                                                                             </button>
-                                                                            {canManage && (
+                                                                            {canEditItinerary && (
                                                                                 <>
                                                                                     <button
                                                                                         type="button"
                                                                                         onClick={() => startEditDay(day.id, block)}
                                                                                         className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                                                     >
-                                                                                        Edit
+                                                                                        Bearbeiten
                                                                                     </button>
                                                                                     <button
                                                                                         type="button"
                                                                                         onClick={() => handleDeleteDay(day.id, block)}
                                                                                         disabled={isDeletingDay}
+                                                                                        aria-label={block.days.length > 1 ? 'Tagesblock löschen' : 'Tag löschen'}
+                                                                                        title={block.days.length > 1 ? 'Tagesblock löschen' : 'Tag löschen'}
                                                                                         className="inline-flex items-center rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
                                                                                     >
                                                                                         {isDeletingDay
-                                                                                            ? 'Deleting...'
-                                                                                            : block.days.length > 1
-                                                                                                ? 'Delete block'
-                                                                                                : 'Delete day'}
+                                                                                            ? 'Löschen...'
+                                                                                            : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
                                                                                     </button>
                                                                                 </>
                                                                             )}
                                                                         </div>
                                                                     </div>
-                                                                    <p className="mt-3 text-sm text-slate-700 leading-6">{day.summary}</p>
+                                                                    {day.summary?.trim().length > 0 && (
+                                                                        <p className="mt-3 whitespace-pre-line text-sm text-slate-700 leading-6">
+                                                                            {day.summary}
+                                                                        </p>
+                                                                    )}
                                                                     {!collapsedDays[day.id] && (
                                                                     <div className="mt-4 relative pl-2">
                                                                         {day.activities.length > 0 && (
-                                                                            <div className="absolute left-5 top-1 bottom-1 w-px bg-slate-200" aria-hidden="true" />
+                                                                            <div className="absolute left-4 top-1 bottom-1 w-px bg-slate-200" aria-hidden="true" />
                                                                         )}
                                                                         <div className="space-y-3">
                                                                         {sortActivities(day.activities).map((activity) => (
                                                                             <div key={activity.id} className="relative flex items-start gap-3">
-                                                                                {editingActivityId === activity.id && editingActivityDayId === day.id && canManage ? (
+                                                                                {editingActivityId === activity.id && editingActivityDayId === day.id && canEditItinerary ? (
+                                                                                    <div
+                                                                                        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md"
+                                                                                        onClick={cancelEditActivity}
+                                                                                    >
                                                                                     <form
                                                                                         onSubmit={(e) => handleUpdateActivity(e, day.id, activity.id)}
-                                                                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 space-y-2"
+                                                                                        onClick={(e) => e.stopPropagation()}
+                                                                                        className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white px-4 py-4 space-y-3 shadow-xl"
                                                                                     >
+                                                                                        <h4 className="text-base font-semibold text-slate-800">Aktivität bearbeiten</h4>
                                                                                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                                                                             <input
                                                                                                 required
@@ -1628,27 +2407,28 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                                                 onChange={(e) => setEditActivityType(e.target.value as 'FLIGHT' | 'LODGING' | 'FOOD' | 'ACTIVITY')}
                                                                                                 className="rounded-lg border border-slate-300 px-2.5 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                                                                                             >
-                                                                                                <option value="ACTIVITY">Activity</option>
-                                                                                                <option value="FOOD">Food</option>
-                                                                                                <option value="LODGING">Lodging</option>
-                                                                                                <option value="FLIGHT">Flight</option>
+                                                                                                <option value="ACTIVITY">Aktivität</option>
+                                                                                                <option value="FOOD">Essen</option>
+                                                                                                <option value="LODGING">Unterkunft</option>
+                                                                                                <option value="FLIGHT">Flug</option>
                                                                                             </select>
                                                                                             <button
                                                                                                 type="submit"
                                                                                                 disabled={isUpdatingActivity}
                                                                                                 className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
                                                                                             >
-                                                                                                {isUpdatingActivity ? 'Saving...' : 'Save'}
+                                                                                                {isUpdatingActivity ? 'Speichern...' : 'Speichern'}
                                                                                             </button>
                                                                                             <button
                                                                                                 type="button"
                                                                                                 onClick={cancelEditActivity}
                                                                                                 className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                                                             >
-                                                                                                Cancel
+                                                                                                Abbrechen
                                                                                             </button>
                                                                                         </div>
                                                                                     </form>
+                                                                                    </div>
                                                                                 ) : (
                                                                                     <>
                                                                                         <div className="relative z-10 mt-0.5 flex h-8 w-8 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-600">
@@ -1660,22 +2440,24 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                                             </span>
                                                                                             <p className="mt-1 text-sm font-medium text-slate-800">{activity.title}</p>
                                                                                         </div>
-                                                                                        {canManage && (
+                                                                                        {canEditItinerary && (
                                                                                             <div className="flex items-center gap-1">
                                                                                                 <button
                                                                                                     type="button"
                                                                                                     onClick={() => startEditActivity(day.id, activity)}
                                                                                                     className="inline-flex items-center rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                                                                 >
-                                                                                                    Edit
+                                                                                                    Bearbeiten
                                                                                                 </button>
                                                                                                 <button
                                                                                                     type="button"
                                                                                                     onClick={() => handleDeleteActivity(day.id, activity.id)}
                                                                                                     disabled={isDeletingActivityId === activity.id}
+                                                                                                    aria-label="Aktivität löschen"
+                                                                                                    title="Aktivität löschen"
                                                                                                     className="inline-flex items-center rounded-lg border border-red-300 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
                                                                                                 >
-                                                                                                    {isDeletingActivityId === activity.id ? 'Deleting...' : 'Delete'}
+                                                                                                    {isDeletingActivityId === activity.id ? 'Löschen...' : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
                                                                                                 </button>
                                                                                             </div>
                                                                                         )}
@@ -1685,14 +2467,23 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                         ))}
                                                                         </div>
                                                                         {day.activities.length === 0 && (
-                                                                            <p className="text-sm text-slate-500">No activities yet.</p>
+                                                                            <p className="text-sm text-slate-500">Noch keine Aktivitäten.</p>
                                                                         )}
                                                                     </div>
                                                                     )}
-                                                                    {!collapsedDays[day.id] && canManage && (
+                                                                    {!collapsedDays[day.id] && canEditItinerary && (
                                                                         <div className="mt-4">
                                                                             {activityFormDayId === day.id ? (
-                                                                                <form onSubmit={(e) => handleAddActivity(e, day.id)} className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-3">
+                                                                                <div
+                                                                                    className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md"
+                                                                                    onClick={cancelAddActivity}
+                                                                                >
+                                                                                <form
+                                                                                    onSubmit={(e) => handleAddActivity(e, day.id)}
+                                                                                    onClick={(e) => e.stopPropagation()}
+                                                                                    className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-4 space-y-3 shadow-xl"
+                                                                                >
+                                                                                    <h4 className="text-base font-semibold text-slate-800">Aktivität hinzufügen</h4>
                                                                                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                                                                         <input
                                                                                             required
@@ -1706,7 +2497,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                                             type="text"
                                                                                             value={activityTitle}
                                                                                             onChange={(e) => setActivityTitle(e.target.value)}
-                                                                                            placeholder="Activity title"
+                                                                                            placeholder="Aktivitätstitel"
                                                                                             className="sm:col-span-2 rounded-lg border border-slate-300 px-2.5 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                                                                                         />
                                                                                     </div>
@@ -1716,27 +2507,28 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                                             onChange={(e) => setActivityType(e.target.value as 'FLIGHT' | 'LODGING' | 'FOOD' | 'ACTIVITY')}
                                                                                             className="rounded-lg border border-slate-300 px-2.5 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                                                                                         >
-                                                                                            <option value="ACTIVITY">Activity</option>
-                                                                                            <option value="FOOD">Food</option>
-                                                                                            <option value="LODGING">Lodging</option>
-                                                                                            <option value="FLIGHT">Flight</option>
+                                                                                            <option value="ACTIVITY">Aktivität</option>
+                                                                                            <option value="FOOD">Essen</option>
+                                                                                            <option value="LODGING">Unterkunft</option>
+                                                                                            <option value="FLIGHT">Flug</option>
                                                                                         </select>
                                                                                         <button
                                                                                             type="submit"
                                                                                             disabled={isSavingActivity}
                                                                                             className="inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
                                                                                         >
-                                                                                            {isSavingActivity ? 'Adding...' : 'Add activity'}
+                                                                                            {isSavingActivity ? 'Hinzufügen...' : 'Aktivität hinzufügen'}
                                                                                         </button>
                                                                                         <button
                                                                                             type="button"
                                                                                             onClick={cancelAddActivity}
                                                                                             className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                                                         >
-                                                                                            Cancel
+                                                                                            Abbrechen
                                                                                         </button>
                                                                                     </div>
                                                                                 </form>
+                                                                                </div>
                                                                             ) : (
                                                                                 <button
                                                                                     type="button"
@@ -1744,7 +2536,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                                     className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                                                 >
                                                                                     <Plus className="h-3.5 w-3.5" />
-                                                                                    Add activity
+                                                                                    Aktivität hinzufügen
                                                                                 </button>
                                                                             )}
                                                                         </div>
@@ -1774,19 +2566,65 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                         )}
 
                         {activeTab === 'explore' && (
-                            <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center">
-                                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4 text-slate-400">
-                                    <MapPin className="h-8 w-8" />
+                            <div className="space-y-5">
+                                <div>
+                                    <h2 className="text-xl font-bold text-slate-800">Orte auf Karte</h2>
+                                    <p className="mt-1 text-sm text-slate-500">
+                                        Alle unterschiedlichen Orte aus deiner Reiseplanung im Überblick.
+                                    </p>
                                 </div>
-                                <h3 className="text-xl font-bold text-slate-800 mb-2">Coming Soon</h3>
-                                <p className="text-slate-500 max-w-sm">
-                                    The explore feature is currently being developed for the next version of Wanderly.
-                                </p>
+
+                                {isLoadingExplorePoints && (
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                                        Orte werden geladen...
+                                    </div>
+                                )}
+
+                                {exploreError && (
+                                    <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                                        {exploreError}
+                                    </div>
+                                )}
+
+                                {!isLoadingExplorePoints && !exploreError && exploreLocations.length === 0 && (
+                                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+                                        <p className="text-sm text-slate-600">
+                                            Es sind noch keine Orte in der Reiseplanung vorhanden.
+                                        </p>
+                                    </div>
+                                )}
+
+                                {!isLoadingExplorePoints && !exploreError && exploreMapPoints.length > 0 && (
+                                    <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                                        <TripExploreMap points={exploreMapPoints} />
+                                    </div>
+                                )}
+
+                                {!isLoadingExplorePoints && !exploreError && exploreLocations.length > 0 && (
+                                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Orte aus der Planung</p>
+                                        <div className="mt-3 space-y-2">
+                                            {exploreOrderedStops.map((stop, index) => (
+                                                <div
+                                                    key={`${stop.location}-${stop.dayNumber}`}
+                                                    className="inline-flex w-full items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                                                >
+                                                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-[11px] font-semibold text-white">
+                                                        {index + 1}
+                                                    </span>
+                                                    <MapPin className="h-3.5 w-3.5 text-blue-500" />
+                                                    <span className="font-medium">{stop.location}</span>
+                                                    <span className="text-xs text-slate-500">ab Tag {stop.dayNumber}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
 
                         {activeTab === 'budget' && (
-                            <div className="space-y-6">
+                            <div className="space-y-8">
                                 <div className="flex items-center justify-between gap-3">
                                     <div>
                                         <h2 className="text-xl font-bold text-slate-800">Trip Budget</h2>
@@ -1794,19 +2632,34 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                             Track pre-trip estimates to understand the total expected cost.
                                         </p>
                                     </div>
-                                    {canManage && (
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowAddBudgetForm((prev) => !prev)}
-                                            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-                                        >
-                                            <Plus className="h-4 w-4" />
-                                            {showAddBudgetForm ? 'Cancel' : 'Add estimate'}
-                                        </button>
-                                    )}
+                                    <div className="flex items-center gap-2">
+                                        {canEditBudget && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowAddBudgetForm((prev) => !prev)}
+                                                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                                            >
+                                                <Plus className="h-4 w-4" />
+                                                Kosten hinzufügen
+                                            </button>
+                                        )}
+                                        {canManage && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setIsBudgetEditMode((prev) => !prev)}
+                                                className={`inline-flex items-center rounded-xl border px-3 py-2 text-sm font-medium transition-colors ${
+                                                    isBudgetEditMode
+                                                        ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
+                                                        : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                                                }`}
+                                            >
+                                                {isBudgetEditMode ? 'Bearbeitungsmodus aktiv' : 'Bearbeitungsmodus'}
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                                         <p className="text-xs uppercase tracking-wide text-slate-500">Total estimate</p>
                                         <p className="mt-1 text-xl font-bold text-slate-800">{formatCurrency(totalBudgetCents)}</p>
@@ -1831,171 +2684,230 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                     </div>
                                 )}
 
-                                {showAddBudgetForm && canManage && (
-                                    <form onSubmit={handleAddBudgetItem} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5 space-y-4">
-                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                            <div className="sm:col-span-2">
-                                                <label htmlFor="budget-title" className="block text-sm font-medium text-slate-700">What cost do you expect?</label>
-                                                <input
-                                                    id="budget-title"
-                                                    type="text"
-                                                    required
-                                                    value={budgetTitle}
-                                                    onChange={(e) => setBudgetTitle(e.target.value)}
-                                                    placeholder="e.g. Flights to Tokyo"
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label htmlFor="budget-category" className="block text-sm font-medium text-slate-700">Category</label>
-                                                <select
-                                                    id="budget-category"
-                                                    value={budgetCategory}
-                                                    onChange={(e) => setBudgetCategory(e.target.value as (typeof BUDGET_CATEGORIES)[number]['value'])}
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                >
-                                                    {BUDGET_CATEGORIES.map((entry) => (
-                                                        <option key={entry.value} value={entry.value}>{entry.label}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                        </div>
-                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                            <div>
-                                                <label htmlFor="budget-amount" className="block text-sm font-medium text-slate-700">Estimated cost (EUR)</label>
-                                                <input
-                                                    id="budget-amount"
-                                                    type="number"
-                                                    min={0}
-                                                    step="0.01"
-                                                    required
-                                                    value={budgetEstimatedCost}
-                                                    onChange={(e) => setBudgetEstimatedCost(e.target.value)}
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label htmlFor="budget-pricing-mode" className="block text-sm font-medium text-slate-700">Cost type</label>
-                                                <select
-                                                    id="budget-pricing-mode"
-                                                    value={budgetPricingMode}
-                                                    onChange={(e) => setBudgetPricingMode(e.target.value as (typeof BUDGET_PRICING_MODES)[number]['value'])}
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                >
-                                                    {BUDGET_PRICING_MODES.map((entry) => (
-                                                        <option key={entry.value} value={entry.value}>{entry.label}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label htmlFor="budget-people-count" className="block text-sm font-medium text-slate-700">For how many people?</label>
-                                                <input
-                                                    id="budget-people-count"
-                                                    type="number"
-                                                    min={1}
-                                                    max={1000}
-                                                    required
-                                                    value={budgetPeopleCount}
-                                                    onChange={(e) => setBudgetPeopleCount(Number(e.target.value))}
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label htmlFor="budget-day-start" className="block text-sm font-medium text-slate-700">From travel day</label>
-                                                <input
-                                                    id="budget-day-start"
-                                                    type="number"
-                                                    min={1}
-                                                    value={budgetDayStart}
-                                                    onChange={(e) => setBudgetDayStart(e.target.value)}
-                                                    placeholder="optional"
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label htmlFor="budget-day-end" className="block text-sm font-medium text-slate-700">To travel day</label>
-                                                <input
-                                                    id="budget-day-end"
-                                                    type="number"
-                                                    min={1}
-                                                    value={budgetDayEnd}
-                                                    onChange={(e) => setBudgetDayEnd(e.target.value)}
-                                                    placeholder="optional"
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <p className="text-xs text-slate-500">
-                                                {budgetPricingMode === 'PER_PERSON'
-                                                    ? 'The entered amount is interpreted as price per person.'
-                                                    : 'The entered amount is interpreted as total for the whole group.'}
-                                            </p>
-                                        </div>
-                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                                            <div className="sm:col-span-3">
-                                                <label htmlFor="budget-notes" className="block text-sm font-medium text-slate-700">Notes</label>
-                                                <input
-                                                    id="budget-notes"
-                                                    type="text"
-                                                    value={budgetNotes}
-                                                    onChange={(e) => setBudgetNotes(e.target.value)}
-                                                    placeholder="Optional details"
-                                                    className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-                                                />
-                                            </div>
-                                        </div>
-                                        <button
-                                            type="submit"
-                                            disabled={isSavingBudget}
-                                            className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                {showAddBudgetForm && canEditBudget && (
+                                    <div
+                                        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md"
+                                        onClick={resetBudgetForm}
+                                    >
+                                        <div
+                                            className="w-full max-w-4xl max-h-[88vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-xl"
+                                            onClick={(e) => e.stopPropagation()}
                                         >
-                                            {isSavingBudget ? 'Saving...' : 'Save estimate'}
-                                        </button>
-                                    </form>
+                                            <form onSubmit={handleAddBudgetItem} className="space-y-4">
+                                                <div className="flex items-center justify-between">
+                                                    <h3 className="text-lg font-semibold text-slate-800">Kosten hinzufügen</h3>
+                                                </div>
+                                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                                    <div className="sm:col-span-2">
+                                                        <label htmlFor="budget-title" className="block text-sm font-medium text-slate-700">Welche Kosten erwartest du?</label>
+                                                        <input
+                                                            id="budget-title"
+                                                            type="text"
+                                                            required
+                                                            value={budgetTitle}
+                                                            onChange={(e) => setBudgetTitle(e.target.value)}
+                                                            placeholder="e.g. Flights to Tokyo"
+                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label htmlFor="budget-category" className="block text-sm font-medium text-slate-700">Kategorie</label>
+                                                        <select
+                                                            id="budget-category"
+                                                            value={budgetCategory}
+                                                            onChange={(e) => setBudgetCategory(e.target.value as (typeof BUDGET_CATEGORIES)[number]['value'])}
+                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                        >
+                                                            {BUDGET_CATEGORIES.map((entry) => (
+                                                                <option key={entry.value} value={entry.value}>{entry.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                                    <div>
+                                                        <label htmlFor="budget-amount" className="block text-sm font-medium text-slate-700">Geschätzte Kosten (EUR)</label>
+                                                        <input
+                                                            id="budget-amount"
+                                                            type="number"
+                                                            min={0}
+                                                            step="0.01"
+                                                            required
+                                                            value={budgetEstimatedCost}
+                                                            onChange={(e) => setBudgetEstimatedCost(e.target.value)}
+                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label htmlFor="budget-pricing-mode" className="block text-sm font-medium text-slate-700">Kostenart</label>
+                                                        <select
+                                                            id="budget-pricing-mode"
+                                                            value={budgetPricingMode}
+                                                            onChange={(e) => setBudgetPricingMode(e.target.value as (typeof BUDGET_PRICING_MODES)[number]['value'])}
+                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                        >
+                                                            {BUDGET_PRICING_MODES.map((entry) => (
+                                                                <option key={entry.value} value={entry.value}>{entry.label}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label htmlFor="budget-people-count" className="block text-sm font-medium text-slate-700">Für wie viele Personen?</label>
+                                                        <input
+                                                            id="budget-people-count"
+                                                            type="number"
+                                                            min={1}
+                                                            max={1000}
+                                                            required
+                                                            value={budgetPeopleCount}
+                                                            onChange={(e) => setBudgetPeopleCount(Number(e.target.value))}
+                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label htmlFor="budget-day-start" className="block text-sm font-medium text-slate-700">Ab Reisetag</label>
+                                                        <input
+                                                            id="budget-day-start"
+                                                            type="number"
+                                                            min={1}
+                                                            value={budgetDayStart}
+                                                            onChange={(e) => setBudgetDayStart(e.target.value)}
+                                                            placeholder="optional"
+                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label htmlFor="budget-day-end" className="block text-sm font-medium text-slate-700">Bis Reisetag</label>
+                                                        <input
+                                                            id="budget-day-end"
+                                                            type="number"
+                                                            min={1}
+                                                            value={budgetDayEnd}
+                                                            onChange={(e) => setBudgetDayEnd(e.target.value)}
+                                                            placeholder="optional"
+                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <p className="text-xs text-slate-500">
+                                                        {budgetPricingMode === 'PER_PERSON'
+                                                            ? 'Der eingegebene Betrag gilt pro Person.'
+                                                            : 'Der eingegebene Betrag gilt für die gesamte Gruppe.'}
+                                                    </p>
+                                                </div>
+                                                {addBudgetWarnings.length > 0 && (
+                                                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                                                        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Hinweise</p>
+                                                        <ul className="mt-1 space-y-1 text-xs text-amber-800">
+                                                            {addBudgetWarnings.map((warning) => (
+                                                                <li key={warning}>• {warning}</li>
+                                                            ))}
+                                                        </ul>
+                                                    </div>
+                                                )}
+                                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                                    <div className="sm:col-span-3">
+                                                        <label htmlFor="budget-notes" className="block text-sm font-medium text-slate-700">Notizen</label>
+                                                        <input
+                                                            id="budget-notes"
+                                                            type="text"
+                                                            value={budgetNotes}
+                                                            onChange={(e) => setBudgetNotes(e.target.value)}
+                                                            placeholder="Optionale Details"
+                                                            className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        type="submit"
+                                                        disabled={isSavingBudget}
+                                                        className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                                    >
+                                                        {isSavingBudget ? 'Speichern...' : 'Schätzung speichern'}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={resetBudgetForm}
+                                                        disabled={isSavingBudget}
+                                                        className="inline-flex items-center rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                                    >
+                                                        Abbrechen
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                    </div>
                                 )}
 
                                 {budgetItems.length === 0 ? (
                                     <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
-                                        <h3 className="text-lg font-semibold text-slate-800">No estimates yet</h3>
+                                        <h3 className="text-lg font-semibold text-slate-800">Noch keine Schätzungen</h3>
                                         <p className="mt-2 text-sm text-slate-500">
                                             {canManage
-                                                ? 'Add estimated expenses to get an early budget indication.'
-                                                : 'The owner has not added any budget estimates yet.'}
+                                                ? 'Aktiviere den Bearbeitungsmodus, um Schätzungen hinzuzufügen.'
+                                                : 'Der Besitzer hat noch keine Budgetschätzungen hinzugefügt.'}
                                         </p>
                                     </div>
                                 ) : (
-                                    <div className="space-y-4">
+                                    <div className="space-y-5">
                                         {groupedBudgetItems.map((group) => {
                                             const isCollapsed = collapsedBudgetCategories[group.category] ?? false;
 
                                             return (
-                                                <div key={group.category} className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+                                                <div key={group.category} className="rounded-xl border border-slate-200 bg-white overflow-hidden">
                                                     <button
                                                         type="button"
                                                         onClick={() => toggleBudgetCategory(group.category)}
-                                                        className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-slate-50 transition-colors"
+                                                        className="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 transition-colors"
                                                     >
                                                         <div>
                                                             <p className="text-sm font-semibold text-slate-800">{formatBudgetCategory(group.category)}</p>
-                                                            <p className="mt-1 text-xs text-slate-500">
-                                                                {group.items.length} item(s) • {formatCurrency(group.perPersonCents)}/person • {formatCurrency(group.totalCents)}
+                                                            <p className="mt-1 text-sm text-slate-500">
+                                                                {group.items.length} Einträge • {formatCurrency(group.perPersonCents)} p.P. • {formatCurrency(group.totalCents)}
                                                             </p>
                                                         </div>
-                                                        <span className="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                                                        <span className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
                                                             {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                                                            Einzelposten
                                                         </span>
                                                     </button>
 
                                                     {!isCollapsed && (
-                                                        <div className="space-y-3 border-t border-slate-100 bg-slate-50/40 p-3 sm:p-4">
-                                                            {group.items.map((item) => (
-                                                                <div key={item.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                                                {editingBudgetId === item.id && canManage ? (
+                                                        <div className="space-y-3 border-t border-slate-100 bg-slate-50/40 p-4">
+                                                            {group.items.map((item) => {
+                                                                const hasDayRange = item.dayStart != null && item.dayEnd != null && item.dayEnd >= item.dayStart;
+                                                                const dayRangeText = hasDayRange
+                                                                    ? item.dayStart === item.dayEnd
+                                                                        ? `${item.dayStart}`
+                                                                        : `${item.dayStart}-${item.dayEnd}`
+                                                                    : null;
+                                                                const warnings = getBudgetWarningEntries({
+                                                                    pricingMode: item.pricingMode,
+                                                                    peopleCount: item.peopleCount,
+                                                                    dayStart: item.dayStart,
+                                                                    dayEnd: item.dayEnd,
+                                                                    estimatedCostCents: item.estimatedCostCents,
+                                                                });
+                                                                const primaryWarning = warnings[0];
+                                                                const additionalWarnings = warnings.slice(1);
+                                                                const warningStyles =
+                                                                    primaryWarning?.level === 'high'
+                                                                        ? 'border-red-200 bg-red-50 text-red-800'
+                                                                        : primaryWarning?.level === 'medium'
+                                                                            ? 'border-amber-200 bg-amber-50 text-amber-800'
+                                                                            : 'border-slate-200 bg-slate-50 text-slate-700';
+                                                                const hasLongNotes = Boolean(item.notes && (item.notes.length > 140 || item.notes.includes('\n')));
+                                                                const isNotesExpanded = expandedBudgetNotes[item.id] ?? false;
+
+                                                                return (
+                                                                <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                                {editingBudgetId === item.id && canEditBudget ? (
                                                     <form onSubmit={(e) => handleUpdateBudgetItem(e, item.id)} className="space-y-4">
                                                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                                             <div className="sm:col-span-2">
-                                                                <label htmlFor={`edit-budget-title-${item.id}`} className="block text-sm font-medium text-slate-700">What cost do you expect?</label>
+                                                                <label htmlFor={`edit-budget-title-${item.id}`} className="block text-sm font-medium text-slate-700">Welche Kosten erwartest du?</label>
                                                                 <input
                                                                     id={`edit-budget-title-${item.id}`}
                                                                     type="text"
@@ -2006,7 +2918,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                 />
                                                             </div>
                                                             <div>
-                                                                <label htmlFor={`edit-budget-category-${item.id}`} className="block text-sm font-medium text-slate-700">Category</label>
+                                                                <label htmlFor={`edit-budget-category-${item.id}`} className="block text-sm font-medium text-slate-700">Kategorie</label>
                                                                 <select
                                                                     id={`edit-budget-category-${item.id}`}
                                                                     value={editBudgetCategory}
@@ -2021,7 +2933,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                         </div>
                                                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                                             <div>
-                                                                <label htmlFor={`edit-budget-amount-${item.id}`} className="block text-sm font-medium text-slate-700">Estimated cost (EUR)</label>
+                                                                <label htmlFor={`edit-budget-amount-${item.id}`} className="block text-sm font-medium text-slate-700">Geschätzte Kosten (EUR)</label>
                                                                 <input
                                                                     id={`edit-budget-amount-${item.id}`}
                                                                     type="number"
@@ -2034,7 +2946,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                 />
                                                             </div>
                                                             <div>
-                                                                <label htmlFor={`edit-budget-pricing-mode-${item.id}`} className="block text-sm font-medium text-slate-700">Cost type</label>
+                                                                <label htmlFor={`edit-budget-pricing-mode-${item.id}`} className="block text-sm font-medium text-slate-700">Kostenart</label>
                                                                 <select
                                                                     id={`edit-budget-pricing-mode-${item.id}`}
                                                                     value={editBudgetPricingMode}
@@ -2047,7 +2959,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                 </select>
                                                             </div>
                                                             <div>
-                                                                <label htmlFor={`edit-budget-people-count-${item.id}`} className="block text-sm font-medium text-slate-700">For how many people?</label>
+                                                                <label htmlFor={`edit-budget-people-count-${item.id}`} className="block text-sm font-medium text-slate-700">Für wie viele Personen?</label>
                                                                 <input
                                                                     id={`edit-budget-people-count-${item.id}`}
                                                                     type="number"
@@ -2062,7 +2974,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                         </div>
                                                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                                             <div>
-                                                                <label htmlFor={`edit-budget-day-start-${item.id}`} className="block text-sm font-medium text-slate-700">From travel day</label>
+                                                                <label htmlFor={`edit-budget-day-start-${item.id}`} className="block text-sm font-medium text-slate-700">Ab Reisetag</label>
                                                                 <input
                                                                     id={`edit-budget-day-start-${item.id}`}
                                                                     type="number"
@@ -2074,7 +2986,7 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                 />
                                                             </div>
                                                             <div>
-                                                                <label htmlFor={`edit-budget-day-end-${item.id}`} className="block text-sm font-medium text-slate-700">To travel day</label>
+                                                                <label htmlFor={`edit-budget-day-end-${item.id}`} className="block text-sm font-medium text-slate-700">Bis Reisetag</label>
                                                                 <input
                                                                     id={`edit-budget-day-end-${item.id}`}
                                                                     type="number"
@@ -2089,13 +3001,35 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                         <div>
                                                             <p className="text-xs text-slate-500">
                                                                 {editBudgetPricingMode === 'PER_PERSON'
-                                                                    ? 'The entered amount is interpreted as price per person.'
-                                                                    : 'The entered amount is interpreted as total for the whole group.'}
+                                                                    ? 'Der eingegebene Betrag gilt pro Person.'
+                                                                    : 'Der eingegebene Betrag gilt für die gesamte Gruppe.'}
                                                             </p>
                                                         </div>
+                                                        {getBudgetWarnings({
+                                                            pricingMode: editBudgetPricingMode,
+                                                            peopleCount: editBudgetPeopleCount,
+                                                            dayStart: parseOptionalDayNumber(editBudgetDayStart),
+                                                            dayEnd: parseOptionalDayNumber(editBudgetDayEnd),
+                                                            estimatedCostCents: Math.round((Number(editBudgetEstimatedCost) || 0) * 100),
+                                                        }).length > 0 && (
+                                                            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                                                                <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Hinweise</p>
+                                                                <ul className="mt-1 space-y-1 text-xs text-amber-800">
+                                                                    {getBudgetWarnings({
+                                                                        pricingMode: editBudgetPricingMode,
+                                                                        peopleCount: editBudgetPeopleCount,
+                                                                        dayStart: parseOptionalDayNumber(editBudgetDayStart),
+                                                                        dayEnd: parseOptionalDayNumber(editBudgetDayEnd),
+                                                                        estimatedCostCents: Math.round((Number(editBudgetEstimatedCost) || 0) * 100),
+                                                                    }).map((warning) => (
+                                                                        <li key={warning}>• {warning}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                        )}
                                                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                                             <div className="sm:col-span-3">
-                                                                <label htmlFor={`edit-budget-notes-${item.id}`} className="block text-sm font-medium text-slate-700">Notes</label>
+                                                                <label htmlFor={`edit-budget-notes-${item.id}`} className="block text-sm font-medium text-slate-700">Notizen</label>
                                                                 <input
                                                                     id={`edit-budget-notes-${item.id}`}
                                                                     type="text"
@@ -2111,69 +3045,130 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                                                 disabled={isUpdatingBudget}
                                                                 className="inline-flex items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
                                                             >
-                                                                {isUpdatingBudget ? 'Saving...' : 'Save changes'}
+                                                                {isUpdatingBudget ? 'Speichern...' : 'Änderungen speichern'}
                                                             </button>
                                                             <button
                                                                 type="button"
                                                                 onClick={cancelEditBudgetItem}
                                                                 className="inline-flex items-center rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                             >
-                                                                Cancel
+                                                                Abbrechen
                                                             </button>
                                                         </div>
                                                     </form>
                                                 ) : (
-                                                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                                                        <div>
-                                                            <h3 className="text-base font-semibold text-slate-800">{item.title}</h3>
-                                                            <p className="mt-1 text-sm text-slate-600">{formatBudgetCategory(item.category)}</p>
-                                                            {formatBudgetDayRange(item.dayStart, item.dayEnd) && (
-                                                                <p className="mt-1 text-xs font-medium text-blue-700">
-                                                                    {formatBudgetDayRange(item.dayStart, item.dayEnd)}
-                                                                </p>
+                                                    <div
+                                                        className={`grid grid-cols-1 gap-4 ${canEditBudget
+                                                            ? 'sm:grid-cols-[minmax(0,1fr)_190px_132px_156px]'
+                                                            : 'sm:grid-cols-[minmax(0,1fr)_190px_132px]'
+                                                            } sm:items-start sm:gap-3`}
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <h3 className="inline-flex items-center gap-2 text-base font-semibold text-slate-800">
+                                                                {(() => {
+                                                                    const { Icon, className } = getBudgetCategoryIcon(item.category);
+                                                                    return <Icon className={`h-4 w-4 ${className}`} />;
+                                                                })()}
+                                                                {item.title}
+                                                            </h3>
+                                                            {hasDayRange && (
+                                                                <div className="mt-1">
+                                                                    <span className="inline-flex items-center gap-1 rounded-lg bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-700">
+                                                                        <Calendar className="h-3.5 w-3.5" />
+                                                                        {`Tag ${dayRangeText}`}
+                                                                    </span>
+                                                                </div>
                                                             )}
                                                             <p className="mt-1 text-sm text-slate-500">
-                                                                {formatBudgetPricingMode(item.pricingMode)} for {item.peopleCount} people
+                                                                Basis: {formatCurrency(item.estimatedCostCents)}
+                                                                {item.pricingMode === 'PER_PERSON' ? ' pro Person' : ' für Gruppe'}
                                                             </p>
-                                                            <p className="mt-1 text-xs text-slate-500">
-                                                                Base: {formatCurrency(item.estimatedCostCents)}
-                                                                {item.pricingMode === 'PER_PERSON' ? ' per person' : ' for group'}
-                                                            </p>
-                                                            {item.notes && (
-                                                                <p className="mt-1 text-sm text-slate-500">{item.notes}</p>
+                                                            {primaryWarning && (
+                                                                <div className={`mt-2 rounded-lg border px-2.5 py-1.5 ${warningStyles}`}>
+                                                                    <p className="text-[11px] font-medium">
+                                                                        Hinweis: {primaryWarning.message}
+                                                                    </p>
+                                                                    {additionalWarnings.length > 0 && (
+                                                                        <details className="mt-1">
+                                                                            <summary className="cursor-pointer text-[11px] font-medium">
+                                                                                Weitere Hinweise ({additionalWarnings.length})
+                                                                            </summary>
+                                                                            <ul className="mt-1 space-y-1 text-[11px]">
+                                                                                {additionalWarnings.map((warning) => (
+                                                                                    <li key={warning.message}>• {warning.message}</li>
+                                                                                ))}
+                                                                            </ul>
+                                                                        </details>
+                                                                    )}
+                                                                </div>
                                                             )}
                                                         </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="inline-flex rounded-lg bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
-                                                                {formatCurrency(getBudgetItemPerPersonCents(item))}/person
+                                                        <div className="grid grid-cols-2 gap-2 sm:hidden">
+                                                            <span className="inline-flex h-8 items-center justify-center gap-1 rounded-lg bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
+                                                                {formatCurrency(getBudgetItemPerPersonCents(item))} p.P.
+                                                                <span className="mx-0.5 text-slate-400">|</span>
+                                                                <Users className="h-3.5 w-3.5" />
+                                                                {item.peopleCount}
                                                             </span>
-                                                            <span className="inline-flex rounded-lg bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-700">
+                                                            <span className="inline-flex h-8 items-center justify-center rounded-lg bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-700">
                                                                 {formatCurrency(getBudgetItemTotalCents(item))}
                                                             </span>
-                                                            {canManage && (
-                                                                <>
+                                                        </div>
+                                                        <span className="hidden h-8 items-center justify-center gap-1 rounded-lg bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700 sm:inline-flex sm:w-[190px] sm:justify-self-end">
+                                                                {formatCurrency(getBudgetItemPerPersonCents(item))} p.P.
+                                                                <span className="mx-0.5 text-slate-400">|</span>
+                                                                <Users className="h-3.5 w-3.5" />
+                                                                {item.peopleCount}
+                                                        </span>
+                                                        <span className="hidden h-8 items-center justify-center rounded-lg bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-700 sm:inline-flex sm:w-[132px] sm:justify-self-end">
+                                                                {formatCurrency(getBudgetItemTotalCents(item))}
+                                                        </span>
+                                                        {canEditBudget && (
+                                                            <div className="flex items-center gap-2 sm:w-[156px] sm:justify-self-end sm:justify-end">
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => startEditBudgetItem(item)}
                                                                         className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                                     >
-                                                                        Edit
+                                                                        Bearbeiten
                                                                     </button>
                                                                     <button
                                                                         type="button"
                                                                         onClick={() => handleDeleteBudgetItem(item.id)}
                                                                         disabled={isDeletingBudgetId === item.id}
+                                                                        aria-label="Budget-Eintrag löschen"
+                                                                        title="Budget-Eintrag löschen"
                                                                         className="inline-flex items-center rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
                                                                     >
-                                                                        {isDeletingBudgetId === item.id ? 'Deleting...' : 'Delete'}
+                                                                        {isDeletingBudgetId === item.id ? 'Löschen...' : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
                                                                     </button>
-                                                                </>
-                                                            )}
-                                                        </div>
+                                                            </div>
+                                                        )}
+                                                        {item.notes && (
+                                                            <div className={canEditBudget ? 'sm:col-span-4' : 'sm:col-span-3'}>
+                                                                <p
+                                                                    className={`whitespace-pre-wrap break-words text-sm text-slate-500 ${
+                                                                        hasLongNotes && !isNotesExpanded ? 'line-clamp-2' : ''
+                                                                    }`}
+                                                                >
+                                                                    {item.notes}
+                                                                </p>
+                                                                {hasLongNotes && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => toggleBudgetNotes(item.id)}
+                                                                        className="mt-1 text-xs font-medium text-blue-700 hover:text-blue-800"
+                                                                    >
+                                                                        {isNotesExpanded ? 'Weniger anzeigen' : 'Mehr anzeigen'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 )}
                                                                 </div>
-                                                            ))}
+                                                                );
+                                                            })}
                                                         </div>
                                                     )}
                                                 </div>
@@ -2182,6 +3177,14 @@ export default function TripDetailsClient({ trip, canManage, canViewParticipants
                                     </div>
                                 )}
                             </div>
+                        )}
+
+                        {activeTab === 'chat' && (
+                            <TripChatPanel
+                                tripId={trip.id}
+                                currentUserId={currentUserId}
+                                initialMessages={trip.chatMessages}
+                            />
                         )}
                     </div>
                 </div>

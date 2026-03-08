@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth/authOptions';
 import { prisma } from '@/lib/prisma/client';
+import { authorizeTripMutation } from '@/lib/trips/apiAuthorization';
+import { createTripSystemMessage } from '@/lib/trips/chatMessages';
 
 type Context = {
     params: Promise<{ id: string; itemId: string }>;
@@ -60,14 +60,11 @@ const ALLOWED_PRICING_MODES = new Set(['PER_PERSON', 'GROUP_TOTAL']);
 
 export async function PATCH(req: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id: tripId, itemId } = await context.params;
+        const auth = await authorizeTripMutation(tripId, 'EDIT_BUDGET');
+        if (!auth.ok) {
+            return auth.response;
+        }
         const { title, category, pricingMode, peopleCount, estimatedCost, dayStart, dayEnd, notes } = await req.json();
 
         const parsedTitle = typeof title === 'string' ? title.trim() : '';
@@ -117,23 +114,6 @@ export async function PATCH(req: Request, context: Context) {
             }
         } else if (parsedDayEndRaw !== null) {
             return NextResponse.json({ message: 'Day start is required when day end is set' }, { status: 400 });
-        }
-
-        const membership = await prisma.tripMember.findUnique({
-            where: {
-                tripId_userId: {
-                    tripId,
-                    userId,
-                },
-            },
-        });
-
-        if (!membership) {
-            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
-        }
-
-        if (membership.role !== 'OWNER') {
-            return NextResponse.json({ message: 'Only the owner can edit budget' }, { status: 403 });
         }
 
         const trip = await prisma.trip.findUnique({
@@ -188,6 +168,8 @@ export async function PATCH(req: Request, context: Context) {
             },
         });
 
+        await createTripSystemMessage(tripId, 'Es gab neue oder geänderte Budgetposten.');
+
         return NextResponse.json({ budgetItem }, { status: 200 });
     } catch (error) {
         console.error('Update budget item error:', error);
@@ -200,30 +182,10 @@ export async function PATCH(req: Request, context: Context) {
 
 export async function DELETE(_: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id: tripId, itemId } = await context.params;
-
-        const membership = await prisma.tripMember.findUnique({
-            where: {
-                tripId_userId: {
-                    tripId,
-                    userId,
-                },
-            },
-        });
-
-        if (!membership) {
-            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
-        }
-
-        if (membership.role !== 'OWNER') {
-            return NextResponse.json({ message: 'Only the owner can edit budget' }, { status: 403 });
+        const auth = await authorizeTripMutation(tripId, 'EDIT_BUDGET');
+        if (!auth.ok) {
+            return auth.response;
         }
 
         const existing = await budgetItemClient.findFirst({
@@ -245,6 +207,8 @@ export async function DELETE(_: Request, context: Context) {
                 id: itemId,
             },
         });
+
+        await createTripSystemMessage(tripId, 'Es gab neue oder geänderte Budgetposten.');
 
         return NextResponse.json({ message: 'Budget item deleted' }, { status: 200 });
     } catch (error) {

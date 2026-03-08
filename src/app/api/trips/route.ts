@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth/authOptions';
 import { prisma } from '@/lib/prisma/client';
 import { lookupPlaceById } from '@/lib/places/nominatim';
+import { authorizeSignedInMutation } from '@/lib/trips/apiAuthorization';
 
 const ALLOWED_TRIP_CATEGORIES = new Set([
   'Ausflug',
@@ -50,12 +49,11 @@ const tripClient = (prisma as unknown as {
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    const userId = session?.user?.id;
-
-    if (!userId) {
-      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+    const auth = await authorizeSignedInMutation();
+    if (!auth.ok) {
+      return auth.response;
     }
+    const userId = auth.userId;
 
     const {
       title,

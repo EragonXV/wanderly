@@ -1,45 +1,41 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth/authOptions';
 import { prisma } from '@/lib/prisma/client';
+import { authorizeTripMutation } from '@/lib/trips/apiAuthorization';
+import { createTripSystemMessage } from '@/lib/trips/chatMessages';
+import { getEffectiveInvitationStatus } from '@/lib/trips/invitationLifecycle';
 
 type Context = {
     params: Promise<{ id: string }>;
 };
 
+function getAgeFromBirthDate(value: Date | null) {
+    if (!value) {
+        return null;
+    }
+    const now = new Date();
+    let age = now.getFullYear() - value.getFullYear();
+    const hasBirthdayPassed =
+        now.getMonth() > value.getMonth()
+        || (now.getMonth() === value.getMonth() && now.getDate() >= value.getDate());
+    if (!hasBirthdayPassed) {
+        age -= 1;
+    }
+    return age >= 0 ? age : null;
+}
+
 export async function POST(req: Request, context: Context) {
     try {
-        const session = await getServerSession(authOptions);
-        const userId = session?.user?.id;
-
-        if (!userId) {
-            return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-        }
-
         const { id: tripId } = await context.params;
+        const auth = await authorizeTripMutation(tripId, 'MANAGE_PARTICIPANTS');
+        if (!auth.ok) {
+            return auth.response;
+        }
         const { email } = await req.json();
 
         const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
 
         if (!normalizedEmail) {
             return NextResponse.json({ message: 'Email is required' }, { status: 400 });
-        }
-
-        const requesterMembership = await prisma.tripMember.findUnique({
-            where: {
-                tripId_userId: {
-                    tripId,
-                    userId,
-                },
-            },
-        });
-
-        if (!requesterMembership) {
-            return NextResponse.json({ message: 'Trip not found' }, { status: 404 });
-        }
-
-        if (requesterMembership.role !== 'OWNER') {
-            return NextResponse.json({ message: 'Only the owner can invite participants' }, { status: 403 });
         }
 
         const userToInvite = await prisma.user.findUnique({
@@ -50,6 +46,9 @@ export async function POST(req: Request, context: Context) {
                 id: true,
                 name: true,
                 email: true,
+                image: true,
+                birthDate: true,
+                country: true,
             },
         });
 
@@ -70,22 +69,71 @@ export async function POST(req: Request, context: Context) {
             return NextResponse.json({ message: 'User is already a participant' }, { status: 409 });
         }
 
-        await prisma.tripMember.create({
-            data: {
+        const now = new Date();
+        const existingPendingInvitation = await prisma.tripInvitation.findFirst({
+            where: {
                 tripId,
                 userId: userToInvite.id,
-                role: 'MEMBER',
+                status: 'PENDING',
+            },
+            orderBy: {
+                createdAt: 'desc',
             },
         });
 
+        if (existingPendingInvitation) {
+            const effectiveStatus = getEffectiveInvitationStatus(
+                existingPendingInvitation.status,
+                existingPendingInvitation.expiresAt,
+                now
+            );
+            if (effectiveStatus === 'EXPIRED') {
+                await prisma.tripInvitation.update({
+                    where: { id: existingPendingInvitation.id },
+                    data: {
+                        status: 'EXPIRED',
+                        respondedAt: now,
+                    },
+                });
+            } else {
+                return NextResponse.json({ message: 'A pending invitation already exists for this user' }, { status: 409 });
+            }
+        }
+
+        const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        const invitation = await prisma.tripInvitation.create({
+            data: {
+                tripId,
+                userId: userToInvite.id,
+                invitedByUserId: auth.userId,
+                status: 'PENDING',
+                expiresAt,
+            },
+        });
+        const trip = await prisma.trip.findUnique({
+            where: { id: tripId },
+            select: { title: true },
+        });
+
+        await createTripSystemMessage(
+            tripId,
+            `${userToInvite.name || userToInvite.email || 'Ein Nutzer'} wurde zur Reise "${trip?.title ?? tripId}" eingeladen.`
+        );
+
         return NextResponse.json(
             {
-                message: 'Participant invited',
-                member: {
+                message: 'Participant invitation sent',
+                invitation: {
+                    id: invitation.id,
+                    status: invitation.status,
+                    expiresAt: invitation.expiresAt,
+                    createdAt: invitation.createdAt,
                     userId: userToInvite.id,
-                    role: 'MEMBER',
                     name: userToInvite.name || userToInvite.email || 'Unknown user',
                     email: userToInvite.email,
+                    image: userToInvite.image,
+                    age: getAgeFromBirthDate(userToInvite.birthDate),
+                    country: userToInvite.country,
                 },
             },
             { status: 201 }
