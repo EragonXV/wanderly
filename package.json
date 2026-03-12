@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint",
     "db:check": "node scripts/check_db_connection.js",
+    "db:baseline:create": "node scripts/create_baseline_from_database.js",
     "db:migrate": "node scripts/create_sql_migration.js",
     "db:deploy": "node scripts/deploy_sql_migrations.js",
     "db:status": "node scripts/migration_status.js",

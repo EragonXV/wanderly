@@ -12,6 +12,14 @@ The local Prisma datasource is configured via `.env` and defaults to `file:./dev
 
 This project now uses versioned Prisma migrations.
 
+If an existing database already contains schema changes that predate the current baseline, generate a baseline migration from the real database state first:
+
+```bash
+DATABASE_URL="libsql://<host>?authToken=<token>" npm run db:baseline:create -- existing_prod_baseline
+```
+
+This command refuses to run when non-empty migrations already exist unless you pass `--force`.
+
 Create a local migration after editing `prisma/schema.prisma`:
 
 ```bash

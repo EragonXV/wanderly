@@ -84,6 +84,7 @@ async function recordMigrationAsApplied(client, migration) {
 }
 
 module.exports = {
+  MIGRATIONS_DIR,
   MIGRATION_TABLE,
   getMigrationEntries,
   getClient,
