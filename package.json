@@ -5,8 +5,14 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:deploy": "bash scripts/build_with_migrations.sh",
     "start": "next start",
     "lint": "eslint",
+    "db:migrate": "bash scripts/create_migration.sh",
+    "db:deploy": "bash scripts/deploy_migrations.sh",
+    "db:status": "bash scripts/migration_status.sh",
+    "db:update": "bash scripts/update_db_model.sh",
+    "db:recreate": "bash scripts/recreate_database.sh",
     "test:integration": "node --test tests/**/*.integration.test.mjs",
     "postinstall": "prisma generate"
   },

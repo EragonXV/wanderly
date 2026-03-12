@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## Development
 
-## Getting Started
-
-First, run the development server:
+Start the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The local Prisma datasource is configured via `.env` and defaults to `file:./dev.db`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Database Workflow
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This project now uses versioned Prisma migrations.
+
+Create a local migration after editing `prisma/schema.prisma`:
+
+```bash
+npm run db:migrate -- add_some_change
+```
+
+Check migration status against a target database:
+
+```bash
+DATABASE_URL="libsql://<host>?authToken=<token>" npm run db:status
+```
+
+Apply committed migrations on staging/production:
+
+```bash
+DATABASE_URL="libsql://<host>?authToken=<token>" npm run db:deploy
+```
+
+For Turso you can also provide the variables separately:
+
+```bash
+TURSO_DATABASE_URL="https://<host>.turso.io" TURSO_AUTH_TOKEN="<token>" npm run db:deploy
+```
+
+Build the app with migrations applied first:
+
+```bash
+npm run build:deploy
+```
+
+The deployment scripts use the existing `DATABASE_URL` environment variable directly.
+
+Recommended production setup:
+
+- Commit every Prisma migration in `prisma/migrations`.
+- Set your hosting build command to `npm run build:deploy`.
+- Do not use `prisma db push` in production unless you intentionally want an unmanaged schema change.
+
+## First Baseline
+
+The repository includes a baseline migration in [prisma/migrations/20260312000000_init/migration.sql](/Users/Frederick.Pokoj/Projects/wanderly/prisma/migrations/20260312000000_init/migration.sql). New environments should use `npm run db:deploy` instead of manual schema updates.
+
+## Notes
+
+- Existing production databases that were previously managed manually may still need a one-time reset or a one-time manual alignment before `migrate deploy` can take over cleanly.
+- If a production database already contains tables but no Prisma migration history, baseline it first before relying on automated deploy migrations.
 
 ## Learn More
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Prisma Migrate Documentation](https://www.prisma.io/docs/orm/prisma-migrate)
