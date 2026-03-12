@@ -8,7 +8,7 @@ import { UserAvatar } from '@/components/ui/UserAvatar';
 import TripChatPanel from '@/components/trips/TripChatPanel';
 import {
     ArrowLeft, Calendar, MapPin, Users, Settings, Plus,
-    Calculator, Map, Camera, Utensils, ChevronDown, ChevronRight, FileText, UserRoundPlus, Car, Plane, House, Trash2, MessageCircle
+    Calculator, Map, Camera, Utensils, ChevronDown, ChevronRight, FileText, UserRoundPlus, Car, Plane, House, Trash2, MessageCircle, Pencil
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -107,11 +107,11 @@ type TripTab = 'overview' | 'itinerary' | 'explore' | 'budget' | 'chat';
 
 const BUDGET_CATEGORIES = [
     { value: 'TRANSPORT', label: 'Transport' },
-    { value: 'ACCOMMODATION', label: 'Accommodation' },
-    { value: 'FOOD', label: 'Food' },
-    { value: 'ACTIVITIES', label: 'Activities' },
-    { value: 'INSURANCE', label: 'Insurance' },
-    { value: 'OTHER', label: 'Other' },
+    { value: 'ACCOMMODATION', label: 'Unterkunft' },
+    { value: 'FOOD', label: 'Verpflegung' },
+    { value: 'ACTIVITIES', label: 'Aktivitäten' },
+    { value: 'INSURANCE', label: 'Versicherung' },
+    { value: 'OTHER', label: 'Sonstiges' },
 ] as const;
 
 const BUDGET_PRICING_MODES = [
@@ -129,6 +129,12 @@ const formatCurrency = (cents: number) =>
 
 const formatBudgetCategory = (category: string) =>
     BUDGET_CATEGORIES.find((entry) => entry.value === category)?.label || category;
+
+const getBudgetCategoryChartColor = (category: string) => {
+    const categoryIndex = BUDGET_CATEGORIES.findIndex((entry) => entry.value === category);
+    const normalizedIndex = categoryIndex >= 0 ? categoryIndex : BUDGET_CATEGORIES.length - 1;
+    return BUDGET_CHART_COLORS[normalizedIndex % BUDGET_CHART_COLORS.length];
+};
 
 const getBudgetCategoryIcon = (category: string) => {
     switch (category) {
@@ -347,14 +353,13 @@ export default function TripDetailsClient({
     const [collapsedBudgetCategories, setCollapsedBudgetCategories] = useState<Record<string, boolean>>({});
     const [expandedBudgetNotes, setExpandedBudgetNotes] = useState<Record<string, boolean>>({});
     const [isItineraryEditMode, setIsItineraryEditMode] = useState(false);
-    const [isBudgetEditMode, setIsBudgetEditMode] = useState(false);
     const [itineraryError, setItineraryError] = useState('');
     const [budgetError, setBudgetError] = useState('');
     const [explorePoints, setExplorePoints] = useState<ExploreLocationPoint[]>([]);
     const [isLoadingExplorePoints, setIsLoadingExplorePoints] = useState(false);
     const [exploreError, setExploreError] = useState('');
     const canEditItinerary = canManage && isItineraryEditMode;
-    const canEditBudget = canManage && isBudgetEditMode;
+    const canEditBudget = canManage;
     const isAnyModalOpen =
         showAddBudgetForm ||
         showAddDayForm ||
@@ -400,7 +405,9 @@ export default function TripDetailsClient({
             return;
         }
         setIsItineraryEditMode(false);
-        setIsBudgetEditMode(false);
+        setShowAddBudgetForm(false);
+        setEditingBudgetId(null);
+        setBudgetError('');
     }, [canManage]);
 
     useEffect(() => {
@@ -523,23 +530,6 @@ export default function TripDetailsClient({
             clearTimeout(timeout);
         };
     }, [editLocation, editLocationPlaceId, editingDayId, canEditItinerary, isEditLocationDirty]);
-
-    useEffect(() => {
-        if (isBudgetEditMode) {
-            return;
-        }
-        setShowAddBudgetForm(false);
-        setEditingBudgetId(null);
-        setEditBudgetTitle('');
-        setEditBudgetCategory('TRANSPORT');
-        setEditBudgetPricingMode('GROUP_TOTAL');
-        setEditBudgetPeopleCount(1);
-        setEditBudgetEstimatedCost('');
-        setEditBudgetDayStart('');
-        setEditBudgetDayEnd('');
-        setEditBudgetNotes('');
-        setBudgetError('');
-    }, [isBudgetEditMode]);
 
     const sortActivities = (activities: ItineraryDay['activities']) =>
         [...activities].sort((a, b) => a.time.localeCompare(b.time));
@@ -759,7 +749,7 @@ export default function TripDetailsClient({
         return budgetItemsByCategory.map((entry, index) => ({
             ...entry,
             sharePercent: Math.max(1, Math.round((entry.totalCents / totalBudgetCents) * 100)),
-            color: BUDGET_CHART_COLORS[index % BUDGET_CHART_COLORS.length],
+            color: getBudgetCategoryChartColor(entry.category),
         }));
     }, [budgetItemsByCategory, totalBudgetCents]);
     const budgetPieGradient = useMemo(() => {
@@ -2627,33 +2617,20 @@ export default function TripDetailsClient({
                             <div className="space-y-8">
                                 <div className="flex items-center justify-between gap-3">
                                     <div>
-                                        <h2 className="text-xl font-bold text-slate-800">Trip Budget</h2>
+                                        <h2 className="text-xl font-bold text-slate-800">Reisebudget</h2>
                                         <p className="mt-1 text-sm text-slate-500">
-                                            Track pre-trip estimates to understand the total expected cost.
+                                            Erfasse Kostenschätzungen vor der Reise, um die voraussichtlichen Gesamtkosten besser einschätzen zu können.
                                         </p>
                                     </div>
                                     <div className="flex items-center gap-2">
-                                        {canEditBudget && (
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowAddBudgetForm((prev) => !prev)}
-                                                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-                                            >
-                                                <Plus className="h-4 w-4" />
-                                                Kosten hinzufügen
-                                            </button>
-                                        )}
                                         {canManage && (
                                             <button
                                                 type="button"
-                                                onClick={() => setIsBudgetEditMode((prev) => !prev)}
-                                                className={`inline-flex items-center rounded-xl border px-3 py-2 text-sm font-medium transition-colors ${
-                                                    isBudgetEditMode
-                                                        ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
-                                                        : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
-                                                }`}
+                                                onClick={() => setShowAddBudgetForm((prev) => !prev)}
+                                                className="inline-flex items-center gap-2 whitespace-nowrap rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
                                             >
-                                                {isBudgetEditMode ? 'Bearbeitungsmodus aktiv' : 'Bearbeitungsmodus'}
+                                                <Plus className="h-4 w-4" />
+                                                Kosten hinzufügen
                                             </button>
                                         )}
                                     </div>
@@ -2661,20 +2638,54 @@ export default function TripDetailsClient({
 
                                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Total estimate</p>
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Gesamtschätzung</p>
                                         <p className="mt-1 text-xl font-bold text-slate-800">{formatCurrency(totalBudgetCents)}</p>
                                     </div>
                                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Per person</p>
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Pro Person</p>
                                         <p className="mt-1 text-xl font-bold text-slate-800">{formatCurrency(totalBudgetPerPersonCents)}</p>
                                     </div>
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Categories</p>
-                                        <p className="mt-1 text-xl font-bold text-slate-800">{budgetItemsByCategory.length}</p>
-                                    </div>
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Line items</p>
-                                        <p className="mt-1 text-xl font-bold text-slate-800">{budgetItems.length}</p>
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 sm:col-span-2">
+                                        <p className="text-xs uppercase tracking-wide text-slate-500">Kostenverteilung</p>
+                                        {budgetCategoryChartData.length > 0 ? (
+                                            <div className="mt-3 space-y-3">
+                                                <div className="flex h-2.5 overflow-hidden rounded-full bg-slate-200">
+                                                    {budgetCategoryChartData.map((entry) => (
+                                                        <div
+                                                            key={entry.category}
+                                                            className="h-full"
+                                                            style={{
+                                                                width: `${entry.sharePercent}%`,
+                                                                backgroundColor: entry.color,
+                                                            }}
+                                                            title={`${formatBudgetCategory(entry.category)}: ${formatCurrency(entry.totalCents)}`}
+                                                        />
+                                                    ))}
+                                                </div>
+                                                <div className="flex flex-wrap gap-x-4 gap-y-2">
+                                                    {budgetCategoryChartData.map((entry) => (
+                                                        <div
+                                                            key={entry.category}
+                                                            className="inline-flex items-center gap-1.5 text-xs text-slate-600"
+                                                            title={`${formatBudgetCategory(entry.category)}: ${formatCurrency(entry.totalCents)}`}
+                                                        >
+                                                            <span
+                                                                className="h-2.5 w-2.5 rounded-full"
+                                                                style={{ backgroundColor: entry.color }}
+                                                                aria-hidden="true"
+                                                            />
+                                                            {(() => {
+                                                                const { Icon } = getBudgetCategoryIcon(entry.category);
+                                                                return <Icon className="h-3.5 w-3.5" style={{ color: entry.color }} aria-hidden="true" />;
+                                                            })()}
+                                                            <span>{formatCurrency(entry.totalCents)}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <p className="mt-3 text-sm text-slate-500">Noch keine Kategorien vorhanden.</p>
+                                        )}
                                     </div>
                                 </div>
 
@@ -2706,7 +2717,7 @@ export default function TripDetailsClient({
                                                             required
                                                             value={budgetTitle}
                                                             onChange={(e) => setBudgetTitle(e.target.value)}
-                                                            placeholder="e.g. Flights to Tokyo"
+                                                            placeholder="z. B. Flüge nach Tokio"
                                                             className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
                                                         />
                                                     </div>
@@ -2846,43 +2857,56 @@ export default function TripDetailsClient({
                                         <h3 className="text-lg font-semibold text-slate-800">Noch keine Schätzungen</h3>
                                         <p className="mt-2 text-sm text-slate-500">
                                             {canManage
-                                                ? 'Aktiviere den Bearbeitungsmodus, um Schätzungen hinzuzufügen.'
+                                                ? 'Füge die erste Kostenschätzung für diese Reise hinzu.'
                                                 : 'Der Besitzer hat noch keine Budgetschätzungen hinzugefügt.'}
                                         </p>
                                     </div>
                                 ) : (
                                     <div className="space-y-5">
                                         {groupedBudgetItems.map((group) => {
-                                            const isCollapsed = collapsedBudgetCategories[group.category] ?? false;
+                                            const isCollapsed = collapsedBudgetCategories[group.category] ?? true;
 
                                             return (
                                                 <div key={group.category} className="rounded-xl border border-slate-200 bg-white overflow-hidden">
                                                     <button
                                                         type="button"
                                                         onClick={() => toggleBudgetCategory(group.category)}
-                                                        className="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 transition-colors"
+                                                        className="grid w-full items-center gap-3 px-4 py-4 text-left transition-all hover:bg-slate-50 hover:shadow-sm sm:grid-cols-[minmax(0,1fr)_132px_auto]"
                                                     >
-                                                        <div>
-                                                            <p className="text-sm font-semibold text-slate-800">{formatBudgetCategory(group.category)}</p>
+                                                        <div className="min-w-0">
+                                                            <p className="inline-flex items-center gap-2 text-sm font-semibold text-slate-800">
+                                                                {(() => {
+                                                                    const { Icon } = getBudgetCategoryIcon(group.category);
+                                                                    return (
+                                                                        <Icon
+                                                                            className="h-4 w-4"
+                                                                            style={{ color: getBudgetCategoryChartColor(group.category) }}
+                                                                        />
+                                                                    );
+                                                                })()}
+                                                                {formatBudgetCategory(group.category)}
+                                                            </p>
                                                             <p className="mt-1 text-sm text-slate-500">
-                                                                {group.items.length} Einträge • {formatCurrency(group.perPersonCents)} p.P. • {formatCurrency(group.totalCents)}
+                                                                {group.items.length} Einträge
                                                             </p>
                                                         </div>
-                                                        <span className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                                                        <span className="hidden h-8 items-center justify-center rounded-md bg-slate-200 px-3 py-1 text-sm font-semibold text-slate-700 sm:inline-flex sm:w-[132px] sm:justify-self-end">
+                                                            {formatCurrency(group.totalCents)}
+                                                        </span>
+                                                        <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 sm:justify-self-end">
                                                             {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                                                            Einzelposten
                                                         </span>
                                                     </button>
 
                                                     {!isCollapsed && (
-                                                        <div className="space-y-3 border-t border-slate-100 bg-slate-50/40 p-4">
+                                                        <div className="border-t border-slate-100 bg-slate-50/40">
+                                                            <div className="hidden items-center gap-3 border-b border-slate-200 bg-slate-100/80 px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 sm:grid sm:grid-cols-[minmax(0,1fr)_132px_auto]">
+                                                                <span>Posten</span>
+                                                                <span className="text-right">Kosten</span>
+                                                                <span />
+                                                            </div>
+                                                            <div className="divide-y divide-slate-200">
                                                             {group.items.map((item) => {
-                                                                const hasDayRange = item.dayStart != null && item.dayEnd != null && item.dayEnd >= item.dayStart;
-                                                                const dayRangeText = hasDayRange
-                                                                    ? item.dayStart === item.dayEnd
-                                                                        ? `${item.dayStart}`
-                                                                        : `${item.dayStart}-${item.dayEnd}`
-                                                                    : null;
                                                                 const warnings = getBudgetWarningEntries({
                                                                     pricingMode: item.pricingMode,
                                                                     peopleCount: item.peopleCount,
@@ -2902,7 +2926,14 @@ export default function TripDetailsClient({
                                                                 const isNotesExpanded = expandedBudgetNotes[item.id] ?? false;
 
                                                                 return (
-                                                                <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                                                <div
+                                                                    key={item.id}
+                                                                    className={`bg-white px-4 py-3 ${
+                                                                        canEditBudget && editingBudgetId !== item.id
+                                                                            ? 'group/budget-item transition-all hover:bg-blue-50/70 hover:shadow-sm'
+                                                                            : ''
+                                                                    }`}
+                                                                >
                                                 {editingBudgetId === item.id && canEditBudget ? (
                                                     <form onSubmit={(e) => handleUpdateBudgetItem(e, item.id)} className="space-y-4">
                                                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -3049,6 +3080,14 @@ export default function TripDetailsClient({
                                                             </button>
                                                             <button
                                                                 type="button"
+                                                                onClick={() => handleDeleteBudgetItem(item.id)}
+                                                                disabled={isDeletingBudgetId === item.id || isUpdatingBudget}
+                                                                className="inline-flex items-center rounded-xl border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                                            >
+                                                                {isDeletingBudgetId === item.id ? 'Löschen...' : 'Löschen'}
+                                                            </button>
+                                                            <button
+                                                                type="button"
                                                                 onClick={cancelEditBudgetItem}
                                                                 className="inline-flex items-center rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                             >
@@ -3058,31 +3097,35 @@ export default function TripDetailsClient({
                                                     </form>
                                                 ) : (
                                                     <div
-                                                        className={`grid grid-cols-1 gap-4 ${canEditBudget
-                                                            ? 'sm:grid-cols-[minmax(0,1fr)_190px_132px_156px]'
-                                                            : 'sm:grid-cols-[minmax(0,1fr)_190px_132px]'
-                                                            } sm:items-start sm:gap-3`}
+                                                        role={canEditBudget ? 'button' : undefined}
+                                                        tabIndex={canEditBudget ? 0 : undefined}
+                                                        onClick={canEditBudget ? () => startEditBudgetItem(item) : undefined}
+                                                        onKeyDown={canEditBudget ? (e) => {
+                                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                                e.preventDefault();
+                                                                startEditBudgetItem(item);
+                                                            }
+                                                        } : undefined}
+                                                        className={`grid grid-cols-1 gap-4 rounded-lg px-2 py-1 sm:grid-cols-[minmax(0,1fr)_132px_auto] sm:items-center sm:gap-3 ${
+                                                            canEditBudget
+                                                                ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-200'
+                                                                : ''
+                                                        }`}
+                                                        aria-label={canEditBudget ? `${item.title} bearbeiten` : undefined}
+                                                        title={canEditBudget ? 'Klicken zum Bearbeiten' : undefined}
                                                     >
                                                         <div className="min-w-0">
-                                                            <h3 className="inline-flex items-center gap-2 text-base font-semibold text-slate-800">
-                                                                {(() => {
-                                                                    const { Icon, className } = getBudgetCategoryIcon(item.category);
-                                                                    return <Icon className={`h-4 w-4 ${className}`} />;
-                                                                })()}
-                                                                {item.title}
-                                                            </h3>
-                                                            {hasDayRange && (
-                                                                <div className="mt-1">
-                                                                    <span className="inline-flex items-center gap-1 rounded-lg bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-700">
-                                                                        <Calendar className="h-3.5 w-3.5" />
-                                                                        {`Tag ${dayRangeText}`}
+                                                            <div className="flex items-center gap-2">
+                                                                <h3 className="text-sm font-semibold text-slate-800 transition-colors sm:text-[15px] group-hover/budget-item:text-blue-800">
+                                                                    {item.title}
+                                                                </h3>
+                                                                {canEditBudget && (
+                                                                    <span className="hidden items-center gap-1 rounded-md border border-blue-200 bg-white/90 px-2 py-0.5 text-[11px] font-medium text-blue-700 opacity-0 transition-all duration-150 group-hover/budget-item:opacity-100 sm:inline-flex">
+                                                                        <Pencil className="h-3 w-3" />
+                                                                        Bearbeiten
                                                                     </span>
-                                                                </div>
-                                                            )}
-                                                            <p className="mt-1 text-sm text-slate-500">
-                                                                Basis: {formatCurrency(item.estimatedCostCents)}
-                                                                {item.pricingMode === 'PER_PERSON' ? ' pro Person' : ' für Gruppe'}
-                                                            </p>
+                                                                )}
+                                                            </div>
                                                             {primaryWarning && (
                                                                 <div className={`mt-2 rounded-lg border px-2.5 py-1.5 ${warningStyles}`}>
                                                                     <p className="text-[11px] font-medium">
@@ -3102,73 +3145,45 @@ export default function TripDetailsClient({
                                                                     )}
                                                                 </div>
                                                             )}
+                                                            {item.notes && (
+                                                                <div className={primaryWarning ? 'mt-3' : 'mt-1'}>
+                                                                    <p
+                                                                        className={`whitespace-pre-wrap break-words text-sm text-slate-500 ${
+                                                                            hasLongNotes && !isNotesExpanded ? 'line-clamp-2' : ''
+                                                                        }`}
+                                                                    >
+                                                                        {item.notes}
+                                                                    </p>
+                                                                    {hasLongNotes && (
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                toggleBudgetNotes(item.id);
+                                                                            }}
+                                                                            className="mt-1 text-xs font-medium text-blue-700 hover:text-blue-800"
+                                                                        >
+                                                                            {isNotesExpanded ? 'Weniger anzeigen' : 'Mehr anzeigen'}
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            )}
                                                         </div>
-                                                        <div className="grid grid-cols-2 gap-2 sm:hidden">
-                                                            <span className="inline-flex h-8 items-center justify-center gap-1 rounded-lg bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700">
-                                                                {formatCurrency(getBudgetItemPerPersonCents(item))} p.P.
-                                                                <span className="mx-0.5 text-slate-400">|</span>
-                                                                <Users className="h-3.5 w-3.5" />
-                                                                {item.peopleCount}
-                                                            </span>
-                                                            <span className="inline-flex h-8 items-center justify-center rounded-lg bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-700">
+                                                        <div className="sm:hidden">
+                                                            <span className="inline-flex h-8 items-center justify-center rounded-md bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-700">
                                                                 {formatCurrency(getBudgetItemTotalCents(item))}
                                                             </span>
                                                         </div>
-                                                        <span className="hidden h-8 items-center justify-center gap-1 rounded-lg bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700 sm:inline-flex sm:w-[190px] sm:justify-self-end">
-                                                                {formatCurrency(getBudgetItemPerPersonCents(item))} p.P.
-                                                                <span className="mx-0.5 text-slate-400">|</span>
-                                                                <Users className="h-3.5 w-3.5" />
-                                                                {item.peopleCount}
-                                                        </span>
-                                                        <span className="hidden h-8 items-center justify-center rounded-lg bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-700 sm:inline-flex sm:w-[132px] sm:justify-self-end">
+                                                        <span className="hidden h-8 items-center justify-center rounded-md bg-blue-100 px-3 py-1 text-sm font-semibold text-blue-700 transition-colors group-hover/budget-item:bg-blue-200 sm:inline-flex sm:w-[132px] sm:justify-self-end">
                                                                 {formatCurrency(getBudgetItemTotalCents(item))}
                                                         </span>
-                                                        {canEditBudget && (
-                                                            <div className="flex items-center gap-2 sm:w-[156px] sm:justify-self-end sm:justify-end">
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => startEditBudgetItem(item)}
-                                                                        className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                                                                    >
-                                                                        Bearbeiten
-                                                                    </button>
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => handleDeleteBudgetItem(item.id)}
-                                                                        disabled={isDeletingBudgetId === item.id}
-                                                                        aria-label="Budget-Eintrag löschen"
-                                                                        title="Budget-Eintrag löschen"
-                                                                        className="inline-flex items-center rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
-                                                                    >
-                                                                        {isDeletingBudgetId === item.id ? 'Löschen...' : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
-                                                                    </button>
-                                                            </div>
-                                                        )}
-                                                        {item.notes && (
-                                                            <div className={canEditBudget ? 'sm:col-span-4' : 'sm:col-span-3'}>
-                                                                <p
-                                                                    className={`whitespace-pre-wrap break-words text-sm text-slate-500 ${
-                                                                        hasLongNotes && !isNotesExpanded ? 'line-clamp-2' : ''
-                                                                    }`}
-                                                                >
-                                                                    {item.notes}
-                                                                </p>
-                                                                {hasLongNotes && (
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => toggleBudgetNotes(item.id)}
-                                                                        className="mt-1 text-xs font-medium text-blue-700 hover:text-blue-800"
-                                                                    >
-                                                                        {isNotesExpanded ? 'Weniger anzeigen' : 'Mehr anzeigen'}
-                                                                    </button>
-                                                                )}
-                                                            </div>
-                                                        )}
+                                                        <span className="hidden sm:block" />
                                                     </div>
                                                 )}
                                                                 </div>
                                                                 );
                                                             })}
+                                                            </div>
                                                         </div>
                                                     )}
                                                 </div>
