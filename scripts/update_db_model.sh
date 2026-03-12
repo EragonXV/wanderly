@@ -60,29 +60,6 @@ if [[ -n "${TURSO_AUTH_TOKEN:-}" && "${DATABASE_URL}" != *"authToken="* ]]; then
   fi
 fi
 
-# Normalize and escape URL query params (especially authToken) when possible.
-DATABASE_URL="$(
-  node -e '
-    const input = process.argv[1];
-    try {
-      const url = new URL(input);
-      const token = url.searchParams.get("authToken");
-      if (token !== null) {
-        let normalizedToken = token;
-        try {
-          normalizedToken = decodeURIComponent(token);
-        } catch {
-          normalizedToken = token;
-        }
-        url.searchParams.set("authToken", normalizedToken);
-      }
-      process.stdout.write(url.toString());
-    } catch {
-      process.stdout.write(input);
-    }
-  ' "${DATABASE_URL}"
-)"
-
 if [[ "${DATABASE_URL}" != libsql://* && "${DATABASE_URL}" != file:* ]]; then
   echo "[db:update] Fehler: Ungültiges Schema in DATABASE_URL."
   echo "[db:update] Erlaubt sind 'libsql://' (Turso) oder 'file:' (lokal SQLite)."
@@ -93,10 +70,18 @@ fi
 export DATABASE_URL
 
 echo "[db:update] Verwende URL-Schema: ${DATABASE_URL%%:*}://"
+echo "[db:update] Fuehre Verbindungscheck aus ..."
+node scripts/check_db_connection.js >/dev/null
+
 echo "[db:update] Prisma Client wird generiert ..."
 npx prisma generate
 
-echo "[db:update] Datenbankschema wird aktualisiert (prisma db push) ..."
-npx prisma db push
+if [[ "${DATABASE_URL}" == libsql://* ]]; then
+  echo "[db:update] Aktualisiere libSQL/Turso Schema ueber Prisma-Diff + LibSQL Client ..."
+  node scripts/apply_libsql_schema_diff.js
+else
+  echo "[db:update] Datenbankschema wird aktualisiert (prisma db push) ..."
+  npx prisma db push
+fi
 
 echo "[db:update] Fertig."

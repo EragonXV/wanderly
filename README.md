@@ -18,6 +18,12 @@ Create a local migration after editing `prisma/schema.prisma`:
 npm run db:migrate -- add_some_change
 ```
 
+For existing databases that already contain the current schema but have no migration history yet, run this once:
+
+```bash
+DATABASE_URL="libsql://<host>?authToken=<token>" npm run db:baseline
+```
+
 Check migration status against a target database:
 
 ```bash
@@ -48,7 +54,7 @@ Recommended production setup:
 
 - Commit every Prisma migration in `prisma/migrations`.
 - Set your hosting build command to `npm run build:deploy`.
-- Do not use `prisma db push` in production unless you intentionally want an unmanaged schema change.
+- Run `npm run db:baseline` once for already existing databases before switching to automated deploys.
 
 ## First Baseline
 
