@@ -6,7 +6,9 @@ const {
   getClient,
   getMigrationEntries,
   getAppliedMigrations,
+  hasExistingAppSchema,
   applyMigration,
+  recordMigrationAsApplied,
 } = require('./lib/sql_migrations');
 
 async function main() {
@@ -15,7 +17,15 @@ async function main() {
 
   try {
     const applied = await getAppliedMigrations(client);
+    const hasAppSchema = await hasExistingAppSchema(client);
     const appliedByName = new Map(applied.map((entry) => [entry.name, entry]));
+
+    if (applied.length === 0 && hasAppSchema && migrations.length === 1) {
+      console.log(`[db:deploy] Existing schema detected on ${maskDatabaseUrl(url)}. Baselining ${migrations[0].name}.`);
+      await recordMigrationAsApplied(client, migrations[0]);
+      console.log('[db:deploy] Baseline recorded automatically.');
+      return;
+    }
 
     for (const migration of migrations) {
       const existing = appliedByName.get(migration.name);

@@ -23,11 +23,11 @@ export async function POST(req: Request, context: Context) {
         const parsedTitle = typeof title === 'string' ? title.trim() : '';
         const parsedType = typeof type === 'string' ? type.toUpperCase() : 'ACTIVITY';
 
-        if (!parsedTime || !parsedTitle) {
-            return NextResponse.json({ message: 'Time and title are required' }, { status: 400 });
+        if (!parsedTitle) {
+            return NextResponse.json({ message: 'Title is required' }, { status: 400 });
         }
 
-        if (!TIME_24H_REGEX.test(parsedTime)) {
+        if (parsedTime && !TIME_24H_REGEX.test(parsedTime)) {
             return NextResponse.json({ message: 'Time must be in 24h format (HH:mm)' }, { status: 400 });
         }
 
@@ -56,7 +56,10 @@ export async function POST(req: Request, context: Context) {
             },
         });
 
-        await createTripSystemMessage(tripId, `Aktivität hinzugefügt: ${parsedTime} • ${parsedTitle}`);
+        await createTripSystemMessage(
+            tripId,
+            parsedTime ? `Aktivität hinzugefügt: ${parsedTime} • ${parsedTitle}` : `Aktivität hinzugefügt: ${parsedTitle}`
+        );
 
         return NextResponse.json({ activity }, { status: 201 });
     } catch (error) {

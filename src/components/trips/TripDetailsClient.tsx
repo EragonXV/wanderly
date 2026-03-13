@@ -352,13 +352,12 @@ export default function TripDetailsClient({
     });
     const [collapsedBudgetCategories, setCollapsedBudgetCategories] = useState<Record<string, boolean>>({});
     const [expandedBudgetNotes, setExpandedBudgetNotes] = useState<Record<string, boolean>>({});
-    const [isItineraryEditMode, setIsItineraryEditMode] = useState(false);
     const [itineraryError, setItineraryError] = useState('');
     const [budgetError, setBudgetError] = useState('');
     const [explorePoints, setExplorePoints] = useState<ExploreLocationPoint[]>([]);
     const [isLoadingExplorePoints, setIsLoadingExplorePoints] = useState(false);
     const [exploreError, setExploreError] = useState('');
-    const canEditItinerary = canManage && isItineraryEditMode;
+    const canEditItinerary = canManage;
     const canEditBudget = canManage;
     const isAnyModalOpen =
         showAddBudgetForm ||
@@ -404,42 +403,18 @@ export default function TripDetailsClient({
         if (canManage) {
             return;
         }
-        setIsItineraryEditMode(false);
-        setShowAddBudgetForm(false);
-        setEditingBudgetId(null);
-        setBudgetError('');
-    }, [canManage]);
-
-    useEffect(() => {
-        if (isItineraryEditMode) {
-            return;
-        }
         setShowAddDayForm(false);
         setEditingDayId(null);
         setEditingBlockDayIds([]);
         setEditingBlockLength(1);
-        setEditDayNumber(1);
-        setEditSummary('');
-        setEditLocation('');
-        setEditTagsInput('');
         setActivityFormDayId(null);
-        setActivityTime('');
-        setActivityTitle('');
-        setActivityType('ACTIVITY');
         setEditingActivityDayId(null);
         setEditingActivityId(null);
-        setEditActivityTime('');
-        setEditActivityTitle('');
-        setEditActivityType('ACTIVITY');
-        setLocationSuggestions([]);
-        setLocationPlaceId('');
-        setLocationSuggestionError('');
-        setEditLocationSuggestions([]);
-        setEditLocationPlaceId('');
-        setEditLocationSuggestionError('');
-        setIsEditLocationDirty(false);
         setItineraryError('');
-    }, [isItineraryEditMode]);
+        setShowAddBudgetForm(false);
+        setEditingBudgetId(null);
+        setBudgetError('');
+    }, [canManage]);
 
     useEffect(() => {
         if (locationPlaceId) {
@@ -532,7 +507,21 @@ export default function TripDetailsClient({
     }, [editLocation, editLocationPlaceId, editingDayId, canEditItinerary, isEditLocationDirty]);
 
     const sortActivities = (activities: ItineraryDay['activities']) =>
-        [...activities].sort((a, b) => a.time.localeCompare(b.time));
+        [...activities].sort((a, b) => {
+            const aHasTime = a.time.trim().length > 0;
+            const bHasTime = b.time.trim().length > 0;
+
+            if (aHasTime && bHasTime) {
+                return a.time.localeCompare(b.time);
+            }
+            if (aHasTime) {
+                return -1;
+            }
+            if (bHasTime) {
+                return 1;
+            }
+            return a.title.localeCompare(b.title, 'de');
+        });
 
     const groupedItinerary = useMemo(() => {
         if (sortedItinerary.length === 0) {
@@ -545,7 +534,14 @@ export default function TripDetailsClient({
                 .sort()
                 .join('|');
             const normalizedActivities = [...day.activities]
-                .sort((a, b) => a.time.localeCompare(b.time))
+                .sort((a, b) => {
+                    const aHasTime = a.time.trim().length > 0;
+                    const bHasTime = b.time.trim().length > 0;
+                    if (aHasTime && bHasTime) return a.time.localeCompare(b.time);
+                    if (aHasTime) return -1;
+                    if (bHasTime) return 1;
+                    return a.title.localeCompare(b.title, 'de');
+                })
                 .map((activity) => `${activity.time}|${activity.type}|${activity.title.trim().toLowerCase()}`)
                 .join('||');
 
@@ -1913,11 +1909,7 @@ export default function TripDetailsClient({
                         )}
 
                         {activeTab === 'itinerary' && (
-                            <div
-                                className={`space-y-8 rounded-2xl p-3 sm:p-4 transition-colors ${
-                                    isItineraryEditMode ? 'bg-blue-50/60 ring-1 ring-blue-100' : 'bg-transparent'
-                                }`}
-                            >
+                            <div className="space-y-8 rounded-2xl p-3 sm:p-4">
                                 <div className="flex items-center justify-between mb-6">
                                     <div className="space-y-1">
                                         <h2 className="text-xl font-bold text-slate-800">Reiseplanung</h2>
@@ -1942,19 +1934,6 @@ export default function TripDetailsClient({
                                             >
                                                 <Plus className="h-4 w-4" />
                                                 <span className="hidden sm:inline">{showAddDayForm ? 'Abbrechen' : 'Tag hinzufügen'}</span>
-                                            </button>
-                                        )}
-                                        {canManage && (
-                                            <button
-                                                type="button"
-                                                onClick={() => setIsItineraryEditMode((prev) => !prev)}
-                                                className={`inline-flex min-w-[200px] items-center justify-center rounded-xl border px-3 py-2 text-sm font-medium transition-colors ${
-                                                    isItineraryEditMode
-                                                        ? 'border-emerald-600 bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
-                                                        : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
-                                                }`}
-                                            >
-                                                {isItineraryEditMode ? 'Bearbeitungsmodus aktiv' : 'Bearbeitungsmodus'}
                                             </button>
                                         )}
                                     </div>
@@ -2170,7 +2149,7 @@ export default function TripDetailsClient({
                                                             style={{ left: '-21px' }}
                                                             aria-hidden="true"
                                                         />
-                                                        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                                                        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all hover:bg-slate-50 hover:shadow-sm">
                                                             {editingDayId === day.id && canEditItinerary ? (
                                                                 <div
                                                                     className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md"
@@ -2293,6 +2272,14 @@ export default function TripDetailsClient({
                                                                             </button>
                                                                             <button
                                                                                 type="button"
+                                                                                onClick={() => handleDeleteDay(day.id, block)}
+                                                                                disabled={isDeletingDay || isUpdatingDay}
+                                                                                className="inline-flex items-center rounded-xl border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                                                            >
+                                                                                {isDeletingDay ? 'Löschen...' : editingBlockLength > 1 ? 'Block löschen' : 'Tag löschen'}
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
                                                                                 onClick={cancelEditDay}
                                                                                 className="inline-flex items-center rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                                             >
@@ -2303,10 +2290,13 @@ export default function TripDetailsClient({
                                                                 </div>
                                                             ) : (
                                                                 <>
-                                                                    <div className="flex items-start justify-between gap-3">
+                                                                    <div className="flex items-start justify-between gap-3 rounded-xl">
                                                                         <button
                                                                             type="button"
-                                                                            onClick={() => toggleDayActivities(day.id)}
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                toggleDayActivities(day.id);
+                                                                            }}
                                                                             className="min-w-0 flex-1 text-left"
                                                                             aria-label={collapsedDays[day.id] ? 'Aktivitäten anzeigen' : 'Aktivitäten verbergen'}
                                                                         >
@@ -2319,36 +2309,16 @@ export default function TripDetailsClient({
                                                                         <div className="flex items-center gap-2">
                                                                             <button
                                                                                 type="button"
-                                                                                onClick={() => toggleDayActivities(day.id)}
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    toggleDayActivities(day.id);
+                                                                                }}
                                                                                 aria-label={collapsedDays[day.id] ? 'Aktivitäten anzeigen' : 'Aktivitäten verbergen'}
-                                                                                className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200 transition-colors"
+                                                                                title={collapsedDays[day.id] ? 'Aktivitäten anzeigen' : 'Aktivitäten verbergen'}
+                                                                                className="inline-flex items-center rounded-lg bg-slate-100 p-1.5 text-slate-600 hover:bg-slate-200 transition-colors"
                                                                             >
                                                                                 {collapsedDays[day.id] ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                                                                                Aktivitäten
                                                                             </button>
-                                                                            {canEditItinerary && (
-                                                                                <>
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        onClick={() => startEditDay(day.id, block)}
-                                                                                        className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                                                                                    >
-                                                                                        Bearbeiten
-                                                                                    </button>
-                                                                                    <button
-                                                                                        type="button"
-                                                                                        onClick={() => handleDeleteDay(day.id, block)}
-                                                                                        disabled={isDeletingDay}
-                                                                                        aria-label={block.days.length > 1 ? 'Tagesblock löschen' : 'Tag löschen'}
-                                                                                        title={block.days.length > 1 ? 'Tagesblock löschen' : 'Tag löschen'}
-                                                                                        className="inline-flex items-center rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
-                                                                                    >
-                                                                                        {isDeletingDay
-                                                                                            ? 'Löschen...'
-                                                                                            : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
-                                                                                    </button>
-                                                                                </>
-                                                                            )}
                                                                         </div>
                                                                     </div>
                                                                     {day.summary?.trim().length > 0 && (
@@ -2357,13 +2327,37 @@ export default function TripDetailsClient({
                                                                         </p>
                                                                     )}
                                                                     {!collapsedDays[day.id] && (
-                                                                    <div className="mt-4 relative pl-2">
+                                                                    <div className="mt-4 rounded-2xl border border-slate-200 bg-white/80 px-4 py-4 shadow-inner shadow-slate-100/80">
+                                                                        <div className="mb-3 flex items-center justify-between gap-3">
+                                                                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                                                                Aktivitäten
+                                                                            </p>
+                                                                            <div className="flex items-center gap-2">
+                                                                                <p className="text-xs text-slate-500">
+                                                                                    {day.activities.length} Einträge
+                                                                                </p>
+                                                                                {canEditItinerary && activityFormDayId !== day.id && (
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={() => startAddActivity(day.id)}
+                                                                                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                                                                                    >
+                                                                                        <Plus className="h-3.5 w-3.5" />
+                                                                                        Aktivität hinzufügen
+                                                                                    </button>
+                                                                                )}
+                                                                            </div>
+                                                                        </div>
+                                                                        <div className="relative">
                                                                         {day.activities.length > 0 && (
-                                                                            <div className="absolute left-4 top-1 bottom-1 w-px bg-slate-200" aria-hidden="true" />
+                                                                            <div className="absolute left-4 top-4 bottom-4 w-px bg-slate-200" aria-hidden="true" />
                                                                         )}
                                                                         <div className="space-y-3">
                                                                         {sortActivities(day.activities).map((activity) => (
-                                                                            <div key={activity.id} className="relative flex items-start gap-3">
+                                                                            <div
+                                                                                key={activity.id}
+                                                                                className="group/itinerary-activity relative flex items-center gap-3"
+                                                                            >
                                                                                 {editingActivityId === activity.id && editingActivityDayId === day.id && canEditItinerary ? (
                                                                                     <div
                                                                                         className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md"
@@ -2377,7 +2371,6 @@ export default function TripDetailsClient({
                                                                                         <h4 className="text-base font-semibold text-slate-800">Aktivität bearbeiten</h4>
                                                                                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                                                                             <input
-                                                                                                required
                                                                                                 type="time"
                                                                                                 value={editActivityTime}
                                                                                                 onChange={(e) => setEditActivityTime(e.target.value)}
@@ -2411,6 +2404,14 @@ export default function TripDetailsClient({
                                                                                             </button>
                                                                                             <button
                                                                                                 type="button"
+                                                                                                onClick={() => handleDeleteActivity(day.id, activity.id)}
+                                                                                                disabled={isDeletingActivityId === activity.id || isUpdatingActivity}
+                                                                                                className="inline-flex items-center rounded-lg border border-red-300 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
+                                                                                            >
+                                                                                                {isDeletingActivityId === activity.id ? 'Löschen...' : 'Löschen'}
+                                                                                            </button>
+                                                                                            <button
+                                                                                                type="button"
                                                                                                 onClick={cancelEditActivity}
                                                                                                 className="inline-flex items-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                                                                                             >
@@ -2421,35 +2422,39 @@ export default function TripDetailsClient({
                                                                                     </div>
                                                                                 ) : (
                                                                                     <>
-                                                                                        <div className="relative z-10 mt-0.5 flex h-8 w-8 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-600">
+                                                                                        <div className="relative z-10 flex h-8 w-8 items-center justify-center rounded-full border border-blue-100 bg-white text-blue-600 shadow-sm shadow-slate-200/70">
                                                                                             {renderActivityIcon(activity.type)}
                                                                                         </div>
-                                                                                        <div className="flex-1 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                                                                                            <span className="inline-flex rounded bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
-                                                                                                {activity.time}
-                                                                                            </span>
+                                                                                        <div
+                                                                                            role={canEditItinerary ? 'button' : undefined}
+                                                                                            tabIndex={canEditItinerary ? 0 : undefined}
+                                                                                            onClick={canEditItinerary ? () => startEditActivity(day.id, activity) : undefined}
+                                                                                            onKeyDown={canEditItinerary ? (e) => {
+                                                                                                if (e.key === 'Enter' || e.key === ' ') {
+                                                                                                    e.preventDefault();
+                                                                                                    startEditActivity(day.id, activity);
+                                                                                                }
+                                                                                            } : undefined}
+                                                                                            className={`flex-1 rounded-xl border border-slate-200 bg-slate-50/85 px-3 py-2 transition-all ${
+                                                                                                canEditItinerary
+                                                                                                    ? 'cursor-pointer hover:border-blue-200 hover:bg-white hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-200'
+                                                                                                    : ''
+                                                                                            }`}
+                                                                                            aria-label={canEditItinerary ? `${activity.title} bearbeiten` : undefined}
+                                                                                            title={canEditItinerary ? 'Klicken zum Bearbeiten' : undefined}
+                                                                                        >
+                                                                                            {activity.time.trim().length > 0 && (
+                                                                                                <span className="inline-flex rounded-md bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                                                                                                    {activity.time}
+                                                                                                </span>
+                                                                                            )}
                                                                                             <p className="mt-1 text-sm font-medium text-slate-800">{activity.title}</p>
                                                                                         </div>
                                                                                         {canEditItinerary && (
-                                                                                            <div className="flex items-center gap-1">
-                                                                                                <button
-                                                                                                    type="button"
-                                                                                                    onClick={() => startEditActivity(day.id, activity)}
-                                                                                                    className="inline-flex items-center rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                                                                                                >
-                                                                                                    Bearbeiten
-                                                                                                </button>
-                                                                                                <button
-                                                                                                    type="button"
-                                                                                                    onClick={() => handleDeleteActivity(day.id, activity.id)}
-                                                                                                    disabled={isDeletingActivityId === activity.id}
-                                                                                                    aria-label="Aktivität löschen"
-                                                                                                    title="Aktivität löschen"
-                                                                                                    className="inline-flex items-center rounded-lg border border-red-300 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-70 disabled:cursor-not-allowed transition-colors"
-                                                                                                >
-                                                                                                    {isDeletingActivityId === activity.id ? 'Löschen...' : <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />}
-                                                                                                </button>
-                                                                                            </div>
+                                                                                            <span className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 items-center gap-1 rounded-md border border-blue-200 bg-white/95 px-2 py-0.5 text-[11px] font-medium text-blue-700 opacity-0 shadow-sm transition-all duration-150 group-hover/itinerary-activity:opacity-100 sm:inline-flex">
+                                                                                                <Pencil className="h-3 w-3" />
+                                                                                                Bearbeiten
+                                                                                            </span>
                                                                                         )}
                                                                                     </>
                                                                                 )}
@@ -2459,6 +2464,7 @@ export default function TripDetailsClient({
                                                                         {day.activities.length === 0 && (
                                                                             <p className="text-sm text-slate-500">Noch keine Aktivitäten.</p>
                                                                         )}
+                                                                        </div>
                                                                     </div>
                                                                     )}
                                                                     {!collapsedDays[day.id] && canEditItinerary && (
@@ -2476,7 +2482,6 @@ export default function TripDetailsClient({
                                                                                     <h4 className="text-base font-semibold text-slate-800">Aktivität hinzufügen</h4>
                                                                                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                                                                         <input
-                                                                                            required
                                                                                             type="time"
                                                                                             value={activityTime}
                                                                                             onChange={(e) => setActivityTime(e.target.value)}
@@ -2519,16 +2524,7 @@ export default function TripDetailsClient({
                                                                                     </div>
                                                                                 </form>
                                                                                 </div>
-                                                                            ) : (
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onClick={() => startAddActivity(day.id)}
-                                                                                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-                                                                                >
-                                                                                    <Plus className="h-3.5 w-3.5" />
-                                                                                    Aktivität hinzufügen
-                                                                                </button>
-                                                                            )}
+                                                                            ) : null}
                                                                         </div>
                                                                     )}
                                                                     {day.tags.length > 0 && (

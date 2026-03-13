@@ -64,6 +64,18 @@ async function getAppliedMigrations(client) {
   }));
 }
 
+async function hasExistingAppSchema(client) {
+  const result = await client.execute(`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table'
+      AND name IN ('User', 'Trip', 'TripMember', 'TripItineraryDay')
+    ORDER BY name ASC
+  `);
+
+  return result.rows.length > 0;
+}
+
 async function applyMigration(client, migration) {
   const escapedName = migration.name.replace(/'/g, "''");
   const escapedChecksum = migration.checksum.replace(/'/g, "''");
@@ -89,6 +101,7 @@ module.exports = {
   getMigrationEntries,
   getClient,
   getAppliedMigrations,
+  hasExistingAppSchema,
   ensureMigrationTable,
   applyMigration,
   recordMigrationAsApplied,
